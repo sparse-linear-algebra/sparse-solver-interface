@@ -265,9 +265,10 @@ typedef struct{
    * with sparse low-rank changes, e.g. a function that takes an existing
    * numeric factorization plus logical update data and produces or refreshes a
    * numeric factorization without recomputing symbolic analysis.
-   */
+  */
   ssi_logical_symbolic_factorization_t* (*create_symbolic_factorization)(ssi_context_t* context,ssi_logical_graph_t* graph);
   ssi_logical_numeric_factorization_t* (*create_numeric_factorization)(ssi_context_t* context,ssi_logical_symbolic_factorization_t* symbolic,ssi_logical_numeric_t* numeric);
+  ssi_status_t (*refactorize_numeric_factorization)(ssi_context_t* context,ssi_logical_numeric_factorization_t* factorization);
 
   /*
    * Solve using logical dense matrices for right-hand sides and solutions.
