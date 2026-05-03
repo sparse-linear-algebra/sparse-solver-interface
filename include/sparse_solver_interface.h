@@ -110,6 +110,13 @@ typedef enum {
   ssi_structural_property_symmetric = 1u << 1
 } ssi_structural_property_t;
 
+/*
+ * Numeric property hints are independent bit flags. In SSI,
+ * ssi_numeric_property_positive_definite means the quadratic form is positive
+ * for every nonzero vector, equivalently that the symmetric/Hermitian part is
+ * positive definite. It does not imply ssi_numeric_property_symmetric or
+ * ssi_numeric_property_hermitian.
+ */
 typedef enum {
   ssi_numeric_property_none = 0,
   ssi_numeric_property_symmetric = 1u << 0,
@@ -253,6 +260,11 @@ typedef struct{
 
   /*
    * Factorization lifecycle.
+   *
+   * TODO: Consider an interface for updating an existing numeric factorization
+   * with sparse low-rank changes, e.g. a function that takes an existing
+   * numeric factorization plus logical update data and produces or refreshes a
+   * numeric factorization without recomputing symbolic analysis.
    */
   ssi_logical_symbolic_factorization_t* (*create_symbolic_factorization)(ssi_context_t* context,ssi_logical_graph_t* graph);
   ssi_logical_numeric_factorization_t* (*create_numeric_factorization)(ssi_context_t* context,ssi_logical_symbolic_factorization_t* symbolic,ssi_logical_numeric_t* numeric);
