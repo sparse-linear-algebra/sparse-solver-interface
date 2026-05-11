@@ -6,22 +6,16 @@ project(
   LANGUAGES C CXX
 )
 
-add_library(sparse_solver_interface SHARED)
-
-target_sources(
-  sparse_solver_interface
-  PRIVATE
-    src/sparse_solver_interface.c
-)
+add_library(sparse_solver_interface INTERFACE)
 
 target_include_directories(
   sparse_solver_interface
-  PUBLIC
+  INTERFACE
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include>"
 )
 
-target_compile_features(sparse_solver_interface PUBLIC c_std_99)
+target_compile_features(sparse_solver_interface INTERFACE cxx_std_11)
 
 include(CTest)
 
