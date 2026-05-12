@@ -15,7 +15,7 @@ target_include_directories(
     "$<INSTALL_INTERFACE:include>"
 )
 
-target_compile_features(sparse_solver_interface INTERFACE cxx_std_11)
+target_compile_features(sparse_solver_interface INTERFACE cxx_std_20)
 
 include(CTest)
 
