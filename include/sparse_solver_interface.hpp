@@ -9,7 +9,6 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
-#include <type_traits>
 
 namespace ssi {
 
@@ -62,9 +61,47 @@ enum class matrix_order_t : uint8_t{
   row_major
 };
 
-enum class sparse_orientation_t : uint8_t{
+enum class graph_orientation_t : uint8_t{
   row,
   column
+};
+
+enum class graph_property_state_t : uint8_t{
+  unknown,
+  known_false,
+  known_true
+};
+
+enum class graph_property_t : uint8_t{
+  structurally_symmetric,
+  strong_hall
+};
+
+struct graph_properties_t{
+  graph_property_state_t structurally_symmetric = graph_property_state_t::unknown;
+  graph_property_state_t strong_hall = graph_property_state_t::unknown;
+
+  graph_property_state_t get(graph_property_t property) const{
+    if(property == graph_property_t::structurally_symmetric){
+      return structurally_symmetric;
+    }
+    if(property == graph_property_t::strong_hall){
+      return strong_hall;
+    }
+    throw std::invalid_argument("unknown graph property");
+  }
+
+  void set(graph_property_t property,graph_property_state_t state){
+    if(property == graph_property_t::structurally_symmetric){
+      structurally_symmetric = state;
+      return;
+    }
+    if(property == graph_property_t::strong_hall){
+      strong_hall = state;
+      return;
+    }
+    throw std::invalid_argument("unknown graph property");
+  }
 };
 
 /* Defines memory placement .*/
@@ -139,7 +176,7 @@ struct matrix_view_t{
 class context_t;
 class matrix_t{
   public:
-    matrix_t(context_t* context) : context_(context) {    
+    matrix_t(std::shared_ptr<context_t> context) : context_(context)  {
       if(context == nullptr) throw std::runtime_error("null context");
     }
     virtual ~matrix_t(){}
@@ -151,28 +188,28 @@ class matrix_t{
     }
 
     /*Make enough space but don't initialize the data in any way.*/
-    virtual matrix_t& preallocate(int64_t nrows,int64_t ncols) = 0;
+    virtual void preallocate(int64_t nrows,int64_t ncols) = 0;
     /*Attempts to zero-copy in a matrix view. The lifetime of the data represented by matrix_view_t must outlive this matrix_t.*/
-    virtual matrix_t& borrow_matrix_view(const placement_t& placement,const matrix_view_t& view) = 0;
+    virtual void borrow_matrix_view(const placement_t& placement,const matrix_view_t& view) = 0;
     /*Build from ordinarily addressible memory and have the framework copy it to where it needs to go.*/
     /*The callback should be a function for initializing arbitrary slices into matrix_t.*/
-    virtual matrix_t& build_from_host(std::function<void(matrix_view_t&)>& builder) = 0;
+    virtual void build_from_host(std::function<void(matrix_view_t&)>& builder) = 0;
     /*Build explicitly from a placement.*/
-    virtual matrix_t& build_from_placement(std::function<void(const placement_t&,matrix_view_t&)>& builder) = 0;
+    virtual void build_from_placement(std::function<void(const placement_t&,matrix_view_t&)>& builder) = 0;
 
     /*Read matrix into a host-addressible view.*/
     /*Lifetime of data pointed by matrix_view_t only guaranteed to survive the callback.*/
-    virtual matrix_t& read_to_host(std::function<void(const matrix_view_t&)>& reader) = 0;
+    virtual void read_to_host(std::function<void(const matrix_view_t&)>& reader) = 0;
 
     /*Read matrix into placement-addressible view.*/    
     /*Lifetime of data pointed by matrix_view_t only guaranteed to survive the callback.*/
-    virtual matrix_t& read_to_placement(const placement_t& placement,std::function<void(const matrix_view_t&)>& reader) = 0;
+    virtual void read_to_placement(const placement_t& placement,std::function<void(const matrix_view_t&)>& reader) = 0;
   private:
-    context_t* context_;
+    std::shared_ptr<context_t> context_;
 };
 
-struct sparse_count_builder_t{
-  sparse_orientation_t orientation;
+struct graph_count_builder_t{
+  graph_orientation_t orientation;
   itype_t itype;
   int64_t nrows;
   int64_t ncols;
@@ -191,12 +228,12 @@ struct sparse_count_builder_t{
   void set_count(int64_t row_or_col,int64_t count){
     validate_member(row_or_col);
     if(count < 0){
-      throw std::invalid_argument("negative sparse nonzero count");
+      throw std::invalid_argument("negative graph edge count");
     }
     const int64_t local = row_or_col - beg;
     if(itype == itype_t::i32){
       if(count > std::numeric_limits<int32_t>::max()){
-        throw std::out_of_range("sparse nonzero count does not fit int32_t");
+        throw std::out_of_range("graph edge count does not fit int32_t");
       }
       counts.i32[local] = static_cast<int32_t>(count);
       return;
@@ -205,43 +242,42 @@ struct sparse_count_builder_t{
       counts.i64[local] = count;
       return;
     }
-    throw std::invalid_argument("unknown sparse index type");
+    throw std::invalid_argument("unknown graph index type");
   }
 
   private:
     void validate_member(int64_t row_or_col) const{
       if(row_or_col < beg || row_or_col >= end){
-        throw std::out_of_range("sparse builder row/column is outside the active range");
+        throw std::out_of_range("graph builder row/column is outside the active range");
       }
-      if(orientation == sparse_orientation_t::row){
+      if(orientation == graph_orientation_t::row){
         if(row_or_col < 0 || row_or_col >= nrows){
-          throw std::out_of_range("sparse builder row is outside the matrix");
+          throw std::out_of_range("graph builder row is outside the graph");
         }
         return;
       }
-      if(orientation == sparse_orientation_t::column){
+      if(orientation == graph_orientation_t::column){
         if(row_or_col < 0 || row_or_col >= ncols){
-          throw std::out_of_range("sparse builder column is outside the matrix");
+          throw std::out_of_range("graph builder column is outside the graph");
         }
         return;
       }
-      throw std::invalid_argument("unknown sparse orientation");
+      throw std::invalid_argument("unknown graph orientation");
     }
 };
 
-struct sparse_entry_builder_t{
-  sparse_orientation_t orientation;
+struct graph_edge_builder_t{
+  graph_orientation_t orientation;
   itype_t itype;
-  dtype_t dtype;
   int64_t nrows;
   int64_t ncols;
   /* Rows for row-oriented builds, columns for column-oriented builds. */
   int64_t beg;
   int64_t end;
   /* Offsets are computed by the implementation from the first pass counts.
-   * Users fill ids and values, either directly or through set_entry().
-   * offsets has extent() + 1 entries. ids and values have offsets[extent()]
-   * addressable entries for this slice.
+   * Users fill ids, either directly or through set_edge(). offsets has
+   * extent() + 1 entries. ids has offsets[extent()] addressable entries for
+   * this slice.
    */
   union{
     const int32_t* i32;
@@ -251,12 +287,6 @@ struct sparse_entry_builder_t{
     int32_t* i32;
     int64_t* i64;
   } ids;
-  union{
-    float32_t* fp32;
-    float64_t* fp64;
-    complex64_t* c64;
-    complex128_t* c128;
-  } values;
 
   int64_t extent() const{
     return end - beg;
@@ -264,7 +294,7 @@ struct sparse_entry_builder_t{
 
   int64_t offset(int64_t local) const{
     if(local < 0 || local > extent()){
-      throw std::out_of_range("sparse builder offset index is outside the active range");
+      throw std::out_of_range("graph builder offset index is outside the active range");
     }
     if(itype == itype_t::i32){
       return offsets.i32[local];
@@ -272,76 +302,74 @@ struct sparse_entry_builder_t{
     if(itype == itype_t::i64){
       return offsets.i64[local];
     }
-    throw std::invalid_argument("unknown sparse index type");
+    throw std::invalid_argument("unknown graph index type");
   }
 
-  int64_t count(int64_t row_or_col) const{
+  int64_t degree(int64_t row_or_col) const{
     validate_member(row_or_col);
     const int64_t local = row_or_col - beg;
     return offset(local + 1) - offset(local);
   }
 
-  template<typename T>
-  void set_entry(int64_t row_or_col,int64_t entry_index,int64_t id,const T& value){
-    validate_value_type<T>();
+  int64_t count(int64_t row_or_col) const{
+    return degree(row_or_col);
+  }
+
+  void set_edge(int64_t row_or_col,int64_t edge_index,int64_t id){
     validate_id(id);
     const int64_t local = row_or_col - beg;
     validate_member(row_or_col);
-    const int64_t row_or_col_count = offset(local + 1) - offset(local);
-    if(entry_index < 0 || entry_index >= row_or_col_count){
-      throw std::out_of_range("sparse entry index is outside the row/column count");
+    const int64_t row_or_col_degree = offset(local + 1) - offset(local);
+    if(edge_index < 0 || edge_index >= row_or_col_degree){
+      throw std::out_of_range("graph edge index is outside the row/column degree");
     }
-    const int64_t position = offset(local) + entry_index;
+    const int64_t position = offset(local) + edge_index;
     set_id(position,id);
-    value_mut<T>(position) = value;
   }
 
   private:
-    template<typename>
-    static constexpr bool dependent_false = false;
-
     void validate_member(int64_t row_or_col) const{
       if(row_or_col < beg || row_or_col >= end){
-        throw std::out_of_range("sparse builder row/column is outside the active range");
+        throw std::out_of_range("graph builder row/column is outside the active range");
       }
-      if(orientation == sparse_orientation_t::row){
+      if(orientation == graph_orientation_t::row){
         if(row_or_col < 0 || row_or_col >= nrows){
-          throw std::out_of_range("sparse builder row is outside the matrix");
+          throw std::out_of_range("graph builder row is outside the graph");
         }
         return;
       }
-      if(orientation == sparse_orientation_t::column){
+      if(orientation == graph_orientation_t::column){
         if(row_or_col < 0 || row_or_col >= ncols){
-          throw std::out_of_range("sparse builder column is outside the matrix");
+          throw std::out_of_range("graph builder column is outside the graph");
         }
         return;
       }
-      throw std::invalid_argument("unknown sparse orientation");
+      throw std::invalid_argument("unknown graph orientation");
     }
 
     void validate_id(int64_t id) const{
       if(id < 0){
-        throw std::out_of_range("negative sparse entry id");
+        throw std::out_of_range("negative graph edge id");
       }
-      if(orientation == sparse_orientation_t::row){
+      if(orientation == graph_orientation_t::row){
         if(id >= ncols){
-          throw std::out_of_range("sparse column id is outside the matrix");
+          throw std::out_of_range("graph column id is outside the graph");
         }
         return;
       }
-      if(orientation == sparse_orientation_t::column){
+      if(orientation == graph_orientation_t::column){
         if(id >= nrows){
-          throw std::out_of_range("sparse row id is outside the matrix");
+          throw std::out_of_range("graph row id is outside the graph");
         }
         return;
       }
-      throw std::invalid_argument("unknown sparse orientation");
+      throw std::invalid_argument("unknown graph orientation");
     }
 
     void set_id(int64_t position,int64_t id){
       if(itype == itype_t::i32){
         if(id > std::numeric_limits<int32_t>::max()){
-          throw std::out_of_range("sparse entry id does not fit int32_t");
+          throw std::out_of_range("graph edge id does not fit int32_t");
         }
         ids.i32[position] = static_cast<int32_t>(id);
         return;
@@ -350,73 +378,69 @@ struct sparse_entry_builder_t{
         ids.i64[position] = id;
         return;
       }
-      throw std::invalid_argument("unknown sparse index type");
+      throw std::invalid_argument("unknown graph index type");
+    }
+};
+
+class sparse_matrix_t;
+class symbolic_t;
+class graph_t{
+  public:
+    graph_t(std::shared_ptr<context_t> context) : context_(context){
+      if(context == nullptr) throw std::runtime_error("null context");
+    }
+    virtual ~graph_t() {}
+    virtual itype_t itype() = 0;
+    virtual int64_t nrows() = 0;
+    virtual int64_t ncols() = 0;
+    virtual int64_t nedges() = 0;
+    virtual graph_properties_t properties() const = 0;
+    virtual void assert_property(
+      graph_property_t property,
+      graph_property_state_t state) = 0;
+    virtual void assert_properties(const graph_properties_t& properties) = 0;
+    virtual void compute_property(graph_property_t property) = 0;
+    virtual void compute_properties() = 0;
+    /* Build in two passes. In the first pass the user fills edge counts for
+     * rows or columns in [beg,end). The implementation computes offsets and
+     * presents raw id buffers in the second pass. Edge ids are global;
+     * duplicates within a row/column are invalid and must be rejected by the
+     * implementation before the graph is finalized. Sorted ids are not
+     * required.
+     */
+    virtual void build_from_host(
+      int64_t nrows,
+      int64_t ncols,
+      graph_orientation_t orientation,
+      std::function<void(graph_count_builder_t&)>& count_builder,
+      std::function<void(graph_edge_builder_t&)>& edge_builder) = 0;
+    const context_t& context(){
+      return *context_;
     }
 
-    template<typename T>
-    void validate_value_type() const{
-      if constexpr(std::is_same_v<T,float32_t>){
-        if(dtype != dtype_t::fp32) throw std::invalid_argument("sparse value type does not match dtype");
-      }else if constexpr(std::is_same_v<T,float64_t>){
-        if(dtype != dtype_t::fp64) throw std::invalid_argument("sparse value type does not match dtype");
-      }else if constexpr(std::is_same_v<T,complex64_t>){
-        if(dtype != dtype_t::c64) throw std::invalid_argument("sparse value type does not match dtype");
-      }else if constexpr(std::is_same_v<T,complex128_t>){
-        if(dtype != dtype_t::c128) throw std::invalid_argument("sparse value type does not match dtype");
-      }else{
-        static_assert(dependent_false<T>,"unsupported sparse value type");
-      }
-    }
-
-    template<typename T>
-    T& value_mut(int64_t position){
-      if constexpr(std::is_same_v<T,float32_t>){
-        return values.fp32[position];
-      }else if constexpr(std::is_same_v<T,float64_t>){
-        return values.fp64[position];
-      }else if constexpr(std::is_same_v<T,complex64_t>){
-        return values.c64[position];
-      }else if constexpr(std::is_same_v<T,complex128_t>){
-        return values.c128[position];
-      }else{
-        static_assert(dependent_false<T>,"unsupported sparse value type");
-      }
-    }
+    virtual std::shared_ptr<sparse_matrix_t> make_sparse_matrix() = 0;
+    virtual std::shared_ptr<symbolic_t> make_symbolic_factorization() = 0;
+  private:
+    std::shared_ptr<context_t> context_;
 };
 
 class sparse_matrix_t{
   public:
-    sparse_matrix_t(context_t* context) : context_(context){
-      if(context == nullptr) throw std::runtime_error("null context");
-    }
+    sparse_matrix_t(std::shared_ptr<graph_t> graph) : graph_(graph) {}
     virtual ~sparse_matrix_t() {}
-    virtual itype_t itype() = 0;
-    virtual dtype_t dtype() = 0;
     virtual int64_t nrows() = 0;
     virtual int64_t ncols() = 0;
-    virtual int64_t nnz() = 0;
-    /* Build in two passes. In the first pass the user fills nonzero counts for
-     * rows or columns in [beg,end). The implementation computes offsets and
-     * presents raw ids/values buffers in the second pass. Entry ids are global;
-     * duplicates within a row/column are invalid and must be rejected by the
-     * implementation before the matrix is finalized. Sorted ids are not
-     * required.
-     */
-    virtual sparse_matrix_t& build_from_host(
-      int64_t nrows,
-      int64_t ncols,
-      sparse_orientation_t orientation,
-      std::function<void(sparse_count_builder_t&)>& count_builder,
-      std::function<void(sparse_entry_builder_t&)>& entry_builder) = 0;
-    const context_t& context(){
-      return *context_;
+    const graph_t& graph() {
+      return *graph_;
     }
+
   private:
-    context_t* context_;
+    std::shared_ptr<graph_t> graph_;
 };
 
 class context_t{
   public:
+
 
 };
 
