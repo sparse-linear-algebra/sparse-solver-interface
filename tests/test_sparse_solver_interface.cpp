@@ -1,6 +1,7 @@
 #include "acutest.h"
 #include "sparse_solver_interface.hpp"
 
+#include <complex>
 #include <stdexcept>
 #include <vector>
 
@@ -109,10 +110,81 @@ static void test_graph_edge_builder_column_oriented(void)
   TEST_EXCEPTION(builder.set_edge(2,0,4),std::out_of_range);
 }
 
+static void test_sparse_value_builder_complex64(void)
+{
+  std::vector<ssi::int64_t> offsets{0,2,3};
+  std::vector<ssi::int64_t> ids{1,3,0};
+  std::vector<ssi::complex64_t> values(3);
+  ssi::sparse_value_builder_t builder{
+    ssi::graph_orientation_t::row,
+    ssi::itype_t::i64,
+    ssi::dtype_t::c64,
+    4,
+    5,
+    1,
+    3,
+    {.i64 = offsets.data()},
+    {.i64 = ids.data()},
+    {.c64 = values.data()}
+  };
+
+  TEST_CHECK(builder.degree(1) == 2);
+  TEST_CHECK(builder.degree(2) == 1);
+  TEST_CHECK(builder.edge_id(1,1) == 3);
+
+  builder.set_value<ssi::complex64_t>(1,0,{1.0f,2.0f});
+  builder.value_mut<ssi::complex64_t>(2,0) = {3.0f,4.0f};
+
+  TEST_CHECK(values[0] == ssi::complex64_t(1.0f,2.0f));
+  TEST_CHECK(builder.value<ssi::complex64_t>(2,0) == ssi::complex64_t(3.0f,4.0f));
+  TEST_EXCEPTION(builder.set_value<ssi::complex64_t>(3,0,{0.0f,0.0f}),std::out_of_range);
+  TEST_EXCEPTION(builder.edge_id(1,2),std::out_of_range);
+}
+
+static void test_compressed_graph_view_i32(void)
+{
+  std::vector<ssi::int32_t> offsets{0,1,3};
+  std::vector<ssi::int32_t> ids{3,0,2};
+  ssi::compressed_graph_view_t view{
+    ssi::graph_orientation_t::column,
+    ssi::itype_t::i32,
+    4,
+    6,
+    2,
+    4,
+    {.i32 = offsets.data()},
+    {.i32 = ids.data()}
+  };
+
+  TEST_CHECK(view.extent() == 2);
+  TEST_CHECK(view.offset(2) == 3);
+  TEST_CHECK(view.degree(2) == 1);
+  TEST_CHECK(view.degree(3) == 2);
+  TEST_CHECK(view.edge_id(3,1) == 2);
+  TEST_EXCEPTION(view.edge_id(3,2),std::out_of_range);
+}
+
+static void test_sparse_values_view_float32(void)
+{
+  std::vector<ssi::float32_t> values{1.0f,2.0f,3.0f};
+  ssi::sparse_values_view_t view{
+    ssi::dtype_t::fp32,
+    3,
+    {.fp32 = values.data()}
+  };
+
+  TEST_CHECK(view.value<ssi::float32_t>(0) == 1.0f);
+  TEST_CHECK(view.value<ssi::float32_t>(2) == 3.0f);
+  TEST_EXCEPTION(view.value<ssi::float32_t>(3),std::out_of_range);
+}
+
 TEST_LIST = {
   { "graph_properties", test_graph_properties },
   { "graph_count_builder_i32", test_graph_count_builder_i32 },
   { "graph_edge_builder_row_oriented", test_graph_edge_builder_row_oriented },
   { "graph_edge_builder_column_oriented", test_graph_edge_builder_column_oriented },
+  { "sparse_value_builder_complex64", test_sparse_value_builder_complex64 },
+  { "compressed_graph_view_i32", test_compressed_graph_view_i32 },
+  { "sparse_values_view_float32", test_sparse_values_view_float32 },
   { 0, 0 }
 };

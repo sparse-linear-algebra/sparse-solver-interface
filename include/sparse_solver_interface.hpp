@@ -142,6 +142,7 @@ struct matrix_view_t{
   }
   template<typename T>
   T& value_mut(int64_t r,int64_t c){
+    assert(dtype == dtype_of<T>::value);
     if constexpr(dtype_of<T>::value == dtype_t::fp32){
       return d.fp32[index(r,c)];
     }
@@ -157,6 +158,7 @@ struct matrix_view_t{
   }
   template<typename T>
   const T& value(int64_t r,int64_t c) const{
+    assert(dtype == dtype_of<T>::value);
     if constexpr(dtype_of<T>::value == dtype_t::fp32){
       return d.fp32[index(r,c)];
     }
@@ -180,10 +182,10 @@ class matrix_t{
       if(context == nullptr) throw std::runtime_error("null context");
     }
     virtual ~matrix_t(){}
-    virtual int64_t nrows() = 0;
-    virtual int64_t ncols() = 0;
-    virtual dtype_t dtype() = 0;
-    const context_t& context(){ 
+    virtual int64_t nrows() const = 0;
+    virtual int64_t ncols() const = 0;
+    virtual dtype_t dtype() const = 0;
+    const context_t& context() const{ 
       return *context_; 
     }
 
@@ -382,18 +384,96 @@ struct graph_edge_builder_t{
     }
 };
 
+struct compressed_graph_view_t{
+  graph_orientation_t orientation;
+  itype_t itype;
+  int64_t nrows;
+  int64_t ncols;
+  int64_t beg;
+  int64_t end;
+  union{
+    const int32_t* i32;
+    const int64_t* i64;
+  } offsets;
+  union{
+    const int32_t* i32;
+    const int64_t* i64;
+  } ids;
+
+  int64_t extent() const{
+    return end - beg;
+  }
+
+  int64_t offset(int64_t local) const{
+    if(local < 0 || local > extent()){
+      throw std::out_of_range("compressed graph offset index is outside the active range");
+    }
+    if(itype == itype_t::i32){
+      return offsets.i32[local];
+    }
+    if(itype == itype_t::i64){
+      return offsets.i64[local];
+    }
+    throw std::invalid_argument("unknown graph index type");
+  }
+
+  int64_t degree(int64_t row_or_col) const{
+    validate_member(row_or_col);
+    const int64_t local = row_or_col - beg;
+    return offset(local + 1) - offset(local);
+  }
+
+  int64_t edge_id(int64_t row_or_col,int64_t edge_index) const{
+    validate_member(row_or_col);
+    const int64_t local = row_or_col - beg;
+    const int64_t row_or_col_degree = offset(local + 1) - offset(local);
+    if(edge_index < 0 || edge_index >= row_or_col_degree){
+      throw std::out_of_range("compressed graph edge index is outside the row/column degree");
+    }
+    const int64_t position = offset(local) + edge_index;
+    if(itype == itype_t::i32){
+      return ids.i32[position];
+    }
+    if(itype == itype_t::i64){
+      return ids.i64[position];
+    }
+    throw std::invalid_argument("unknown graph index type");
+  }
+
+  private:
+    void validate_member(int64_t row_or_col) const{
+      if(row_or_col < beg || row_or_col >= end){
+        throw std::out_of_range("compressed graph row/column is outside the active range");
+      }
+      if(orientation == graph_orientation_t::row){
+        if(row_or_col < 0 || row_or_col >= nrows){
+          throw std::out_of_range("compressed graph row is outside the graph");
+        }
+        return;
+      }
+      if(orientation == graph_orientation_t::column){
+        if(row_or_col < 0 || row_or_col >= ncols){
+          throw std::out_of_range("compressed graph column is outside the graph");
+        }
+        return;
+      }
+      throw std::invalid_argument("unknown graph orientation");
+    }
+};
+
 class sparse_matrix_t;
 class symbolic_t;
+class numeric_factorization_t;
 class graph_t{
   public:
     graph_t(std::shared_ptr<context_t> context) : context_(context){
       if(context == nullptr) throw std::runtime_error("null context");
     }
     virtual ~graph_t() {}
-    virtual itype_t itype() = 0;
-    virtual int64_t nrows() = 0;
-    virtual int64_t ncols() = 0;
-    virtual int64_t nedges() = 0;
+    virtual itype_t itype() const = 0;
+    virtual int64_t nrows() const = 0;
+    virtual int64_t ncols() const = 0;
+    virtual int64_t nedges() const = 0;
     virtual graph_properties_t properties() const = 0;
     virtual void assert_property(
       graph_property_t property,
@@ -414,34 +494,295 @@ class graph_t{
       graph_orientation_t orientation,
       std::function<void(graph_count_builder_t&)>& count_builder,
       std::function<void(graph_edge_builder_t&)>& edge_builder) = 0;
-    const context_t& context(){
+    /* Attempts to zero-copy in a host-addressible compressed graph. The
+     * offsets and ids represented by compressed_graph_view_t must outlive this
+     * graph_t.
+     */
+    virtual void borrow_compressed_graph_view(
+      const compressed_graph_view_t& view) = 0;
+    const context_t& context() const{
       return *context_;
     }
 
     virtual std::shared_ptr<sparse_matrix_t> make_sparse_matrix() = 0;
-    virtual std::shared_ptr<symbolic_t> make_symbolic_factorization() = 0;
+    virtual std::shared_ptr<symbolic_t> make_symbolic_analysis() = 0;
   private:
     std::shared_ptr<context_t> context_;
 };
 
+struct sparse_values_view_t{
+  dtype_t dtype;
+  int64_t nedges;
+  union{
+    const float32_t* fp32;
+    const float64_t* fp64;
+    const complex64_t* c64;
+    const complex128_t* c128;
+  } values;
+
+  template<typename T>
+  const T& value(int64_t edge_position) const{
+    assert(dtype == dtype_of<T>::value);
+    if(edge_position < 0 || edge_position >= nedges){
+      throw std::out_of_range("sparse value index is outside the graph edge range");
+    }
+    if constexpr(dtype_of<T>::value == dtype_t::fp32){
+      return values.fp32[edge_position];
+    }
+    if constexpr(dtype_of<T>::value == dtype_t::fp64){
+      return values.fp64[edge_position];
+    }
+    if constexpr(dtype_of<T>::value == dtype_t::c64){
+      return values.c64[edge_position];
+    }
+    if constexpr(dtype_of<T>::value == dtype_t::c128){
+      return values.c128[edge_position];
+    }
+  }
+};
+
+struct sparse_value_builder_t{
+  graph_orientation_t orientation;
+  itype_t itype;
+  dtype_t dtype;
+  int64_t nrows;
+  int64_t ncols;
+  int64_t beg;
+  int64_t end;
+  union{
+    const int32_t* i32;
+    const int64_t* i64;
+  } offsets;
+  union{
+    const int32_t* i32;
+    const int64_t* i64;
+  } ids;
+  union{
+    float32_t* fp32;
+    float64_t* fp64;
+    complex64_t* c64;
+    complex128_t* c128;
+  } values;
+
+  int64_t extent() const{
+    return end - beg;
+  }
+
+  int64_t offset(int64_t local) const{
+    if(local < 0 || local > extent()){
+      throw std::out_of_range("sparse matrix offset index is outside the active range");
+    }
+    if(itype == itype_t::i32){
+      return offsets.i32[local];
+    }
+    if(itype == itype_t::i64){
+      return offsets.i64[local];
+    }
+    throw std::invalid_argument("unknown graph index type");
+  }
+
+  int64_t degree(int64_t row_or_col) const{
+    validate_member(row_or_col);
+    const int64_t local = row_or_col - beg;
+    return offset(local + 1) - offset(local);
+  }
+
+  int64_t edge_id(int64_t row_or_col,int64_t edge_index) const{
+    return id_at(position(row_or_col,edge_index));
+  }
+
+  template<typename T>
+  T& value_mut(int64_t row_or_col,int64_t edge_index){
+    assert(dtype == dtype_of<T>::value);
+    return value_at<T>(position(row_or_col,edge_index));
+  }
+
+  template<typename T>
+  const T& value(int64_t row_or_col,int64_t edge_index) const{
+    assert(dtype == dtype_of<T>::value);
+    return value_at<T>(position(row_or_col,edge_index));
+  }
+
+  template<typename T>
+  void set_value(int64_t row_or_col,int64_t edge_index,const T& value){
+    value_mut<T>(row_or_col,edge_index) = value;
+  }
+
+  private:
+    void validate_member(int64_t row_or_col) const{
+      if(row_or_col < beg || row_or_col >= end){
+        throw std::out_of_range("sparse matrix row/column is outside the active range");
+      }
+      if(orientation == graph_orientation_t::row){
+        if(row_or_col < 0 || row_or_col >= nrows){
+          throw std::out_of_range("sparse matrix row is outside the graph");
+        }
+        return;
+      }
+      if(orientation == graph_orientation_t::column){
+        if(row_or_col < 0 || row_or_col >= ncols){
+          throw std::out_of_range("sparse matrix column is outside the graph");
+        }
+        return;
+      }
+      throw std::invalid_argument("unknown graph orientation");
+    }
+
+    int64_t position(int64_t row_or_col,int64_t edge_index) const{
+      validate_member(row_or_col);
+      const int64_t local = row_or_col - beg;
+      const int64_t row_or_col_degree = offset(local + 1) - offset(local);
+      if(edge_index < 0 || edge_index >= row_or_col_degree){
+        throw std::out_of_range("sparse matrix edge index is outside the row/column degree");
+      }
+      return offset(local) + edge_index;
+    }
+
+    int64_t id_at(int64_t position) const{
+      if(itype == itype_t::i32){
+        return ids.i32[position];
+      }
+      if(itype == itype_t::i64){
+        return ids.i64[position];
+      }
+      throw std::invalid_argument("unknown graph index type");
+    }
+
+    template<typename T>
+    T& value_at(int64_t position){
+      if constexpr(dtype_of<T>::value == dtype_t::fp32){
+        return values.fp32[position];
+      }
+      if constexpr(dtype_of<T>::value == dtype_t::fp64){
+        return values.fp64[position];
+      }
+      if constexpr(dtype_of<T>::value == dtype_t::c64){
+        return values.c64[position];
+      }
+      if constexpr(dtype_of<T>::value == dtype_t::c128){
+        return values.c128[position];
+      }
+    }
+
+    template<typename T>
+    const T& value_at(int64_t position) const{
+      if constexpr(dtype_of<T>::value == dtype_t::fp32){
+        return values.fp32[position];
+      }
+      if constexpr(dtype_of<T>::value == dtype_t::fp64){
+        return values.fp64[position];
+      }
+      if constexpr(dtype_of<T>::value == dtype_t::c64){
+        return values.c64[position];
+      }
+      if constexpr(dtype_of<T>::value == dtype_t::c128){
+        return values.c128[position];
+      }
+    }
+};
+
 class sparse_matrix_t{
   public:
-    sparse_matrix_t(std::shared_ptr<graph_t> graph) : graph_(graph) {}
+    sparse_matrix_t(std::shared_ptr<graph_t> graph) : graph_(graph) {
+      if(graph == nullptr) throw std::runtime_error("null graph");
+    }
     virtual ~sparse_matrix_t() {}
-    virtual int64_t nrows() = 0;
-    virtual int64_t ncols() = 0;
-    const graph_t& graph() {
+    virtual int64_t nrows() const = 0;
+    virtual int64_t ncols() const = 0;
+    virtual dtype_t dtype() const = 0;
+    const graph_t& graph() const{
       return *graph_;
     }
+    const context_t& context() const{
+      return graph_->context();
+    }
+
+    virtual void build_from_host(
+      dtype_t dtype,
+      graph_orientation_t orientation,
+      std::function<void(sparse_value_builder_t&)>& builder) = 0;
+    template<typename T>
+    void build_from_host(
+      graph_orientation_t orientation,
+      std::function<void(sparse_value_builder_t&)>& builder){
+      build_from_host(dtype_of<T>::value,orientation,builder);
+    }
+    virtual void read_to_host(
+      graph_orientation_t orientation,
+      std::function<void(const sparse_value_builder_t&)>& reader) const = 0;
+    /* Attempts to zero-copy in host-addressible sparse values. Values are in
+     * the same edge order used when the graph's ids were supplied.
+     */
+    virtual void borrow_sparse_values_view(
+      const sparse_values_view_t& view) = 0;
 
   private:
     std::shared_ptr<graph_t> graph_;
 };
 
+class symbolic_t{
+  public:
+    symbolic_t(std::shared_ptr<graph_t> graph) : graph_(graph) {
+      if(graph == nullptr) throw std::runtime_error("null graph");
+    }
+    virtual ~symbolic_t() {}
+
+    const graph_t& graph() const{
+      return *graph_;
+    }
+    const context_t& context() const{
+      return graph_->context();
+    }
+
+    virtual std::shared_ptr<numeric_factorization_t>
+    make_numeric_factorization(std::shared_ptr<sparse_matrix_t> matrix) = 0;
+
+  private:
+    std::shared_ptr<graph_t> graph_;
+};
+
+class numeric_factorization_t{
+  public:
+    numeric_factorization_t(
+      std::shared_ptr<symbolic_t> symbolic,
+      std::shared_ptr<sparse_matrix_t> matrix) :
+      symbolic_(symbolic),
+      matrix_(matrix) {
+      if(symbolic == nullptr) throw std::runtime_error("null symbolic analysis");
+      if(matrix == nullptr) throw std::runtime_error("null sparse matrix");
+      if(&symbolic->graph() != &matrix->graph()){
+        throw std::invalid_argument("numeric factorization graph mismatch");
+      }
+    }
+    virtual ~numeric_factorization_t() {}
+
+    const symbolic_t& symbolic() const{
+      return *symbolic_;
+    }
+    const sparse_matrix_t& matrix() const{
+      return *matrix_;
+    }
+    const context_t& context() const{
+      return symbolic_->context();
+    }
+    virtual dtype_t dtype() const = 0;
+    virtual void solve(const matrix_t& rhs,matrix_t& solution) const = 0;
+
+  private:
+    std::shared_ptr<symbolic_t> symbolic_;
+    std::shared_ptr<sparse_matrix_t> matrix_;
+};
+
 class context_t{
   public:
+    virtual ~context_t() {}
 
-
+    virtual std::shared_ptr<matrix_t> make_matrix(dtype_t dtype) = 0;
+    template<typename T>
+    std::shared_ptr<matrix_t> make_matrix(){
+      return make_matrix(dtype_of<T>::value);
+    }
+    virtual std::shared_ptr<graph_t> make_graph(itype_t itype) = 0;
 };
 
 
