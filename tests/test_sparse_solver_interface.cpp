@@ -1,5 +1,6 @@
 #include "acutest.h"
 #include "sparse_solver_interface.hpp"
+#include "sparse_solver_interface_plugin.hpp"
 
 #include <complex>
 #include <stdexcept>
@@ -29,6 +30,44 @@ static void test_graph_properties(void)
   TEST_CHECK(
     properties.strong_hall ==
     ssi::graph_property_state_t::known_false);
+}
+
+static void test_numeric_properties(void)
+{
+  ssi::numeric_properties_t properties;
+
+  TEST_CHECK(
+    properties.get(ssi::numeric_property_t::symmetric) ==
+    ssi::property_state_t::unknown);
+  TEST_CHECK(
+    properties.get(ssi::numeric_property_t::positive_definite) ==
+    ssi::property_state_t::unknown);
+  TEST_CHECK(
+    properties.get(ssi::numeric_property_t::negative_definite) ==
+    ssi::property_state_t::unknown);
+
+  properties.set(
+    ssi::numeric_property_t::symmetric,
+    ssi::property_state_t::known_true);
+  properties.set(
+    ssi::numeric_property_t::positive_definite,
+    ssi::property_state_t::known_false);
+  properties.set(
+    ssi::numeric_property_t::negative_definite,
+    ssi::property_state_t::known_false);
+
+  TEST_CHECK(properties.symmetric == ssi::property_state_t::known_true);
+  TEST_CHECK(properties.positive_definite == ssi::property_state_t::known_false);
+  TEST_CHECK(properties.negative_definite == ssi::property_state_t::known_false);
+}
+
+static void test_c_abi_version(void)
+{
+  ssi_plugin_api_t api{};
+
+  TEST_CHECK(SSI_ABI_VERSION_MAJOR == 0u);
+  TEST_CHECK(SSI_ABI_VERSION_MINOR == 1u);
+  TEST_CHECK(api.struct_size == 0u);
 }
 
 static void test_graph_count_builder_i32(void)
@@ -180,6 +219,8 @@ static void test_sparse_values_view_float32(void)
 
 TEST_LIST = {
   { "graph_properties", test_graph_properties },
+  { "numeric_properties", test_numeric_properties },
+  { "c_abi_version", test_c_abi_version },
   { "graph_count_builder_i32", test_graph_count_builder_i32 },
   { "graph_edge_builder_row_oriented", test_graph_edge_builder_row_oriented },
   { "graph_edge_builder_column_oriented", test_graph_edge_builder_column_oriented },

@@ -66,15 +66,22 @@ enum class graph_orientation_t : uint8_t{
   column
 };
 
-enum class graph_property_state_t : uint8_t{
+enum class property_state_t : uint8_t{
   unknown,
   known_false,
   known_true
 };
+using graph_property_state_t = property_state_t;
 
 enum class graph_property_t : uint8_t{
   structurally_symmetric,
   strong_hall
+};
+
+enum class numeric_property_t : uint8_t{
+  symmetric,
+  positive_definite,
+  negative_definite
 };
 
 struct graph_properties_t{
@@ -101,6 +108,41 @@ struct graph_properties_t{
       return;
     }
     throw std::invalid_argument("unknown graph property");
+  }
+};
+
+struct numeric_properties_t{
+  property_state_t symmetric = property_state_t::unknown;
+  property_state_t positive_definite = property_state_t::unknown;
+  property_state_t negative_definite = property_state_t::unknown;
+
+  property_state_t get(numeric_property_t property) const{
+    if(property == numeric_property_t::symmetric){
+      return symmetric;
+    }
+    if(property == numeric_property_t::positive_definite){
+      return positive_definite;
+    }
+    if(property == numeric_property_t::negative_definite){
+      return negative_definite;
+    }
+    throw std::invalid_argument("unknown numeric property");
+  }
+
+  void set(numeric_property_t property,property_state_t state){
+    if(property == numeric_property_t::symmetric){
+      symmetric = state;
+      return;
+    }
+    if(property == numeric_property_t::positive_definite){
+      positive_definite = state;
+      return;
+    }
+    if(property == numeric_property_t::negative_definite){
+      negative_definite = state;
+      return;
+    }
+    throw std::invalid_argument("unknown numeric property");
   }
 };
 
@@ -690,6 +732,13 @@ class sparse_matrix_t{
     virtual int64_t nrows() const = 0;
     virtual int64_t ncols() const = 0;
     virtual dtype_t dtype() const = 0;
+    virtual numeric_properties_t properties() const = 0;
+    virtual void assert_property(
+      numeric_property_t property,
+      property_state_t state) = 0;
+    virtual void assert_properties(const numeric_properties_t& properties) = 0;
+    virtual void compute_property(numeric_property_t property) = 0;
+    virtual void compute_properties() = 0;
     const graph_t& graph() const{
       return *graph_;
     }
