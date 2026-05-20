@@ -6,6 +6,8 @@ project(
   LANGUAGES C CXX
 )
 
+include(GNUInstallDirs)
+
 add_library(sparse_solver_interface INTERFACE)
 
 target_include_directories(
@@ -16,6 +18,13 @@ target_include_directories(
 )
 
 target_compile_features(sparse_solver_interface INTERFACE cxx_std_20)
+
+install(TARGETS sparse_solver_interface)
+
+install(
+  DIRECTORY include/
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
 
 include(CTest)
 

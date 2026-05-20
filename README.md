@@ -9,6 +9,28 @@ The stable binary plugin ABI is split into:
 - `include/sparse_solver_interface_c.h`: plain C ABI, opaque handles, versioned function table.
 - `include/sparse_solver_interface_plugin.hpp`: header-only C++ adapters for exporting an implementation and loading a plugin back as normal `ssi::context_t` objects.
 
+## Manual Install
+
+Install the headers into a non-system prefix:
+
+```sh
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX="$HOME/.local/sparse_solver_interface/0.1.0"
+cmake --build build
+cmake --install build
+```
+
+Then point another CMake project at that prefix:
+
+```cmake
+set(SPARSE_SOLVER_INTERFACE_ROOT "$ENV{HOME}/.local/sparse_solver_interface/0.1.0")
+
+target_include_directories(
+  my_solver
+  PRIVATE
+    "${SPARSE_SOLVER_INTERFACE_ROOT}/include"
+)
+```
+
 An implementation can export a context factory with:
 
 ```cpp
