@@ -93,9 +93,27 @@ headers, then load the binary artifact at runtime:
 #include "sparse_solver_interface_plugin.hpp"
 
 auto context = ssi::load_context_from_shared_object("./libmy_solver_plugin.so");
-auto graph = context->make_graph(ssi::itype_t::i64);
+ssi::sparse_problem_properties_t properties;
+properties.nrows = 100;
+properties.ncols = 100;
+properties.itype = ssi::itype_t::i64;
+properties.dtype = ssi::dtype_t::fp64;
+properties.structurally_symmetric = ssi::property_state_t::known_true;
+properties.numerically_symmetric = ssi::property_state_t::known_true;
+properties.positive_definite = ssi::property_state_t::known_true;
+
+auto problem = context->make_sparse_problem(properties);
+auto graph = problem->make_graph();
+auto matrix = problem->make_sparse_matrix();
 auto rhs = context->make_matrix(ssi::dtype_t::fp64);
 ```
+
+Use `sparse_problem_properties_t` as the solver-facing properties object. It
+keeps shape, index type, value type, structural facts, and numeric facts in one
+descriptor so each solver can choose its own Cholesky, LU, QR, least-squares, or
+fallback path from matrix facts instead of from caller-supplied algorithm hints.
+The lower-level graph and sparse-matrix objects no longer carry separate
+property sets.
 
 The exported shared object must provide the `ssi_get_plugin` C symbol. The
 `SSI_EXPORT_PLUGIN(...)` macro generates that symbol and fills the versioned C

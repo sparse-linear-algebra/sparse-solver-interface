@@ -21,6 +21,9 @@ struct ssi_context_t{
 struct ssi_matrix_t{
   std::shared_ptr<ssi::matrix_t> ptr;
 };
+struct ssi_sparse_problem_t{
+  std::shared_ptr<ssi::sparse_problem_t> ptr;
+};
 struct ssi_graph_t{
   std::shared_ptr<ssi::graph_t> ptr;
 };
@@ -136,49 +139,51 @@ inline property_state_t from_c(ssi_property_state_t state){
   return static_cast<property_state_t>(state);
 }
 
-inline ssi_graph_property_t to_c(graph_property_t property){
-  return static_cast<ssi_graph_property_t>(property);
+inline ssi_symmetric_storage_t to_c(symmetric_storage_t storage){
+  return static_cast<ssi_symmetric_storage_t>(storage);
 }
 
-inline graph_property_t from_c(ssi_graph_property_t property){
-  return static_cast<graph_property_t>(property);
+inline symmetric_storage_t from_c(ssi_symmetric_storage_t storage){
+  return static_cast<symmetric_storage_t>(storage);
 }
 
-inline ssi_numeric_property_t to_c(numeric_property_t property){
-  return static_cast<ssi_numeric_property_t>(property);
-}
-
-inline numeric_property_t from_c(ssi_numeric_property_t property){
-  return static_cast<numeric_property_t>(property);
-}
-
-inline ssi_graph_properties_t to_c(const graph_properties_t& properties){
+inline ssi_sparse_problem_properties_t to_c(
+  const sparse_problem_properties_t& properties){
   return {
+    properties.nrows,
+    properties.ncols,
+    to_c(properties.orientation),
+    to_c(properties.itype),
+    to_c(properties.dtype),
     to_c(properties.structurally_symmetric),
-    to_c(properties.strong_hall)
-  };
-}
-
-inline graph_properties_t from_c(const ssi_graph_properties_t& properties){
-  return {
-    from_c(properties.structurally_symmetric),
-    from_c(properties.strong_hall)
-  };
-}
-
-inline ssi_numeric_properties_t to_c(const numeric_properties_t& properties){
-  return {
-    to_c(properties.symmetric),
+    to_c(properties.numerically_symmetric),
     to_c(properties.positive_definite),
-    to_c(properties.negative_definite)
+    to_c(properties.negative_definite),
+    to_c(properties.full_column_rank),
+    to_c(properties.full_row_rank),
+    to_c(properties.nonsingular),
+    to_c(properties.strong_hall),
+    to_c(properties.symmetric_storage)
   };
 }
 
-inline numeric_properties_t from_c(const ssi_numeric_properties_t& properties){
+inline sparse_problem_properties_t from_c(
+  const ssi_sparse_problem_properties_t& properties){
   return {
-    from_c(properties.symmetric),
+    properties.nrows,
+    properties.ncols,
+    from_c(properties.orientation),
+    from_c(properties.itype),
+    from_c(properties.dtype),
+    from_c(properties.structurally_symmetric),
+    from_c(properties.numerically_symmetric),
     from_c(properties.positive_definite),
-    from_c(properties.negative_definite)
+    from_c(properties.negative_definite),
+    from_c(properties.full_column_rank),
+    from_c(properties.full_row_rank),
+    from_c(properties.nonsingular),
+    from_c(properties.strong_hall),
+    from_c(properties.symmetric_storage)
   };
 }
 
@@ -483,7 +488,22 @@ inline ssi_status_t context_make_graph(
   });
 }
 
+inline ssi_status_t context_make_sparse_problem(
+  ssi_context_h context,
+  const ssi_sparse_problem_properties_t* properties,
+  ssi_sparse_problem_h* out_problem){
+  return guard([&]{
+    if(context == nullptr || properties == nullptr || out_problem == nullptr){
+      throw std::invalid_argument("null context, properties, or output problem");
+    }
+    *out_problem = new ssi_sparse_problem_t{
+      context->ptr->make_sparse_problem(from_c(*properties))
+    };
+  });
+}
+
 inline void matrix_release(ssi_matrix_h matrix){ delete matrix; }
+inline void sparse_problem_release(ssi_sparse_problem_h problem){ delete problem; }
 inline void graph_release(ssi_graph_h graph){ delete graph; }
 inline void sparse_matrix_release(ssi_sparse_matrix_h matrix){ delete matrix; }
 inline void symbolic_release(ssi_symbolic_h symbolic){ delete symbolic; }
@@ -555,6 +575,50 @@ inline ssi_status_t matrix_read_to_host(
   });
 }
 
+inline ssi_status_t sparse_problem_properties(
+  ssi_sparse_problem_h problem,
+  ssi_sparse_problem_properties_t* out){
+  return guard([&]{ *out = to_c(problem->ptr->properties()); });
+}
+
+inline ssi_status_t sparse_problem_assert_properties(
+  ssi_sparse_problem_h problem,
+  const ssi_sparse_problem_properties_t* properties){
+  return guard([&]{
+    if(properties == nullptr){
+      throw std::invalid_argument("null sparse problem properties");
+    }
+    problem->ptr->assert_properties(from_c(*properties));
+  });
+}
+
+inline ssi_status_t sparse_problem_compute_missing_properties(
+  ssi_sparse_problem_h problem){
+  return guard([&]{ problem->ptr->compute_missing_properties(); });
+}
+
+inline ssi_status_t sparse_problem_make_graph(
+  ssi_sparse_problem_h problem,
+  ssi_graph_h* out_graph){
+  return guard([&]{ *out_graph = new ssi_graph_t{problem->ptr->make_graph()}; });
+}
+
+inline ssi_status_t sparse_problem_make_sparse_matrix(
+  ssi_sparse_problem_h problem,
+  ssi_sparse_matrix_h* out_matrix){
+  return guard([&]{
+    *out_matrix = new ssi_sparse_matrix_t{problem->ptr->make_sparse_matrix()};
+  });
+}
+
+inline ssi_status_t sparse_problem_make_symbolic_analysis(
+  ssi_sparse_problem_h problem,
+  ssi_symbolic_h* out_symbolic){
+  return guard([&]{
+    *out_symbolic = new ssi_symbolic_t{problem->ptr->make_symbolic_analysis()};
+  });
+}
+
 inline ssi_status_t graph_itype(ssi_graph_h graph,ssi_itype_t* out){
   return guard([&]{ *out = to_c(graph->ptr->itype()); });
 }
@@ -566,28 +630,6 @@ inline ssi_status_t graph_ncols(ssi_graph_h graph,int64_t* out){
 }
 inline ssi_status_t graph_nedges(ssi_graph_h graph,int64_t* out){
   return guard([&]{ *out = graph->ptr->nedges(); });
-}
-inline ssi_status_t graph_properties(ssi_graph_h graph,ssi_graph_properties_t* out){
-  return guard([&]{ *out = to_c(graph->ptr->properties()); });
-}
-inline ssi_status_t graph_assert_property(
-  ssi_graph_h graph,
-  ssi_graph_property_t property,
-  ssi_property_state_t state){
-  return guard([&]{ graph->ptr->assert_property(from_c(property),from_c(state)); });
-}
-inline ssi_status_t graph_assert_properties(
-  ssi_graph_h graph,
-  const ssi_graph_properties_t* properties){
-  return guard([&]{ graph->ptr->assert_properties(from_c(*properties)); });
-}
-inline ssi_status_t graph_compute_property(
-  ssi_graph_h graph,
-  ssi_graph_property_t property){
-  return guard([&]{ graph->ptr->compute_property(from_c(property)); });
-}
-inline ssi_status_t graph_compute_properties(ssi_graph_h graph){
-  return guard([&]{ graph->ptr->compute_properties(); });
 }
 
 inline ssi_status_t graph_build_from_host(
@@ -642,30 +684,6 @@ inline ssi_status_t sparse_matrix_ncols(ssi_sparse_matrix_h matrix,int64_t* out)
 }
 inline ssi_status_t sparse_matrix_dtype(ssi_sparse_matrix_h matrix,ssi_dtype_t* out){
   return guard([&]{ *out = to_c(matrix->ptr->dtype()); });
-}
-inline ssi_status_t sparse_matrix_properties(
-  ssi_sparse_matrix_h matrix,
-  ssi_numeric_properties_t* out){
-  return guard([&]{ *out = to_c(matrix->ptr->properties()); });
-}
-inline ssi_status_t sparse_matrix_assert_property(
-  ssi_sparse_matrix_h matrix,
-  ssi_numeric_property_t property,
-  ssi_property_state_t state){
-  return guard([&]{ matrix->ptr->assert_property(from_c(property),from_c(state)); });
-}
-inline ssi_status_t sparse_matrix_assert_properties(
-  ssi_sparse_matrix_h matrix,
-  const ssi_numeric_properties_t* properties){
-  return guard([&]{ matrix->ptr->assert_properties(from_c(*properties)); });
-}
-inline ssi_status_t sparse_matrix_compute_property(
-  ssi_sparse_matrix_h matrix,
-  ssi_numeric_property_t property){
-  return guard([&]{ matrix->ptr->compute_property(from_c(property)); });
-}
-inline ssi_status_t sparse_matrix_compute_properties(ssi_sparse_matrix_h matrix){
-  return guard([&]{ matrix->ptr->compute_properties(); });
 }
 inline ssi_status_t sparse_matrix_build_from_host(
   ssi_sparse_matrix_h matrix,
@@ -742,6 +760,7 @@ inline void fill_export_api(ssi_plugin_api_t* out_api,create_context_fn create){
   out_api->context_release = context_release;
   out_api->context_make_matrix = context_make_matrix;
   out_api->context_make_graph = context_make_graph;
+  out_api->context_make_sparse_problem = context_make_sparse_problem;
   out_api->matrix_release = matrix_release;
   out_api->matrix_nrows = matrix_nrows;
   out_api->matrix_ncols = matrix_ncols;
@@ -750,16 +769,20 @@ inline void fill_export_api(ssi_plugin_api_t* out_api,create_context_fn create){
   out_api->matrix_borrow_matrix_view = matrix_borrow_matrix_view;
   out_api->matrix_build_from_host = matrix_build_from_host;
   out_api->matrix_read_to_host = matrix_read_to_host;
+  out_api->sparse_problem_release = sparse_problem_release;
+  out_api->sparse_problem_properties = sparse_problem_properties;
+  out_api->sparse_problem_assert_properties = sparse_problem_assert_properties;
+  out_api->sparse_problem_compute_missing_properties =
+    sparse_problem_compute_missing_properties;
+  out_api->sparse_problem_make_graph = sparse_problem_make_graph;
+  out_api->sparse_problem_make_sparse_matrix = sparse_problem_make_sparse_matrix;
+  out_api->sparse_problem_make_symbolic_analysis =
+    sparse_problem_make_symbolic_analysis;
   out_api->graph_release = graph_release;
   out_api->graph_itype = graph_itype;
   out_api->graph_nrows = graph_nrows;
   out_api->graph_ncols = graph_ncols;
   out_api->graph_nedges = graph_nedges;
-  out_api->graph_properties = graph_properties;
-  out_api->graph_assert_property = graph_assert_property;
-  out_api->graph_assert_properties = graph_assert_properties;
-  out_api->graph_compute_property = graph_compute_property;
-  out_api->graph_compute_properties = graph_compute_properties;
   out_api->graph_build_from_host = graph_build_from_host;
   out_api->graph_borrow_compressed_graph_view = graph_borrow_compressed_graph_view;
   out_api->graph_make_sparse_matrix = graph_make_sparse_matrix;
@@ -768,11 +791,6 @@ inline void fill_export_api(ssi_plugin_api_t* out_api,create_context_fn create){
   out_api->sparse_matrix_nrows = sparse_matrix_nrows;
   out_api->sparse_matrix_ncols = sparse_matrix_ncols;
   out_api->sparse_matrix_dtype = sparse_matrix_dtype;
-  out_api->sparse_matrix_properties = sparse_matrix_properties;
-  out_api->sparse_matrix_assert_property = sparse_matrix_assert_property;
-  out_api->sparse_matrix_assert_properties = sparse_matrix_assert_properties;
-  out_api->sparse_matrix_compute_property = sparse_matrix_compute_property;
-  out_api->sparse_matrix_compute_properties = sparse_matrix_compute_properties;
   out_api->sparse_matrix_build_from_host = sparse_matrix_build_from_host;
   out_api->sparse_matrix_read_to_host = sparse_matrix_read_to_host;
   out_api->sparse_matrix_borrow_sparse_values_view = sparse_matrix_borrow_sparse_values_view;
@@ -820,6 +838,7 @@ struct imported_plugin_t{
 
 class imported_context_t;
 class imported_matrix_t;
+class imported_sparse_problem_t;
 class imported_graph_t;
 class imported_sparse_matrix_t;
 class imported_symbolic_t;
@@ -878,7 +897,7 @@ class imported_matrix_t final : public matrix_t{
       std::function<void(const placement_t&,matrix_view_t&)>&) override{
       throw std::runtime_error("placement matrix builds are not exposed by the C ABI yet");
     }
-    void read_to_host(std::function<void(const matrix_view_t&)>& reader) override{
+    void read_to_host(std::function<void(const matrix_view_t&)>& reader) const override{
       auto callback = [](const ssi_matrix_view_t* view,void* user_data) -> ssi_status_t{
         return guard([&]{
           auto* fn = static_cast<std::function<void(const matrix_view_t&)>*>(user_data);
@@ -892,7 +911,7 @@ class imported_matrix_t final : public matrix_t{
     }
     void read_to_placement(
       const placement_t&,
-      std::function<void(const matrix_view_t&)>&) override{
+      std::function<void(const matrix_view_t&)>&) const override{
       throw std::runtime_error("placement matrix reads are not exposed by the C ABI yet");
     }
 
@@ -941,30 +960,6 @@ class imported_graph_t final :
       int64_t out = 0;
       check_status(plugin_->api,plugin_->api.graph_nedges(handle_,&out));
       return out;
-    }
-    graph_properties_t properties() const override{
-      ssi_graph_properties_t out{};
-      check_status(plugin_->api,plugin_->api.graph_properties(handle_,&out));
-      return from_c(out);
-    }
-    void assert_property(graph_property_t property,graph_property_state_t state) override{
-      check_status(
-        plugin_->api,
-        plugin_->api.graph_assert_property(handle_,to_c(property),to_c(state)));
-    }
-    void assert_properties(const graph_properties_t& properties) override{
-      ssi_graph_properties_t c_properties = to_c(properties);
-      check_status(
-        plugin_->api,
-        plugin_->api.graph_assert_properties(handle_,&c_properties));
-    }
-    void compute_property(graph_property_t property) override{
-      check_status(
-        plugin_->api,
-        plugin_->api.graph_compute_property(handle_,to_c(property)));
-    }
-    void compute_properties() override{
-      check_status(plugin_->api,plugin_->api.graph_compute_properties(handle_));
     }
     void build_from_host(
       int64_t nrows,
@@ -1046,30 +1041,6 @@ class imported_sparse_matrix_t final : public sparse_matrix_t{
       ssi_dtype_t out = SSI_DTYPE_FP64;
       check_status(plugin_->api,plugin_->api.sparse_matrix_dtype(handle_,&out));
       return from_c(out);
-    }
-    numeric_properties_t properties() const override{
-      ssi_numeric_properties_t out{};
-      check_status(plugin_->api,plugin_->api.sparse_matrix_properties(handle_,&out));
-      return from_c(out);
-    }
-    void assert_property(numeric_property_t property,property_state_t state) override{
-      check_status(
-        plugin_->api,
-        plugin_->api.sparse_matrix_assert_property(handle_,to_c(property),to_c(state)));
-    }
-    void assert_properties(const numeric_properties_t& properties) override{
-      ssi_numeric_properties_t c_properties = to_c(properties);
-      check_status(
-        plugin_->api,
-        plugin_->api.sparse_matrix_assert_properties(handle_,&c_properties));
-    }
-    void compute_property(numeric_property_t property) override{
-      check_status(
-        plugin_->api,
-        plugin_->api.sparse_matrix_compute_property(handle_,to_c(property)));
-    }
-    void compute_properties() override{
-      check_status(plugin_->api,plugin_->api.sparse_matrix_compute_properties(handle_));
     }
     void build_from_host(
       dtype_t dtype,
@@ -1201,6 +1172,57 @@ class imported_numeric_factorization_t final : public numeric_factorization_t{
     ssi_numeric_factorization_h handle_;
 };
 
+class imported_sparse_problem_t final : public sparse_problem_t{
+  public:
+    imported_sparse_problem_t(
+      std::shared_ptr<context_t> context,
+      std::shared_ptr<imported_plugin_t> plugin,
+      ssi_sparse_problem_h handle,
+      sparse_problem_properties_t properties) :
+      sparse_problem_t(context,properties),
+      context_(std::move(context)),
+      plugin_(std::move(plugin)),
+      handle_(handle) {}
+    ~imported_sparse_problem_t() override{
+      if(handle_ != nullptr){
+        plugin_->api.sparse_problem_release(handle_);
+      }
+    }
+
+    sparse_problem_properties_t properties() const override{
+      ssi_sparse_problem_properties_t out{};
+      check_status(
+        plugin_->api,
+        plugin_->api.sparse_problem_properties(handle_,&out));
+      return from_c(out);
+    }
+
+    void assert_properties(const sparse_problem_properties_t& properties) override{
+      ssi_sparse_problem_properties_t c_properties = to_c(properties);
+      check_status(
+        plugin_->api,
+        plugin_->api.sparse_problem_assert_properties(handle_,&c_properties));
+    }
+
+    void compute_missing_properties() override{
+      check_status(
+        plugin_->api,
+        plugin_->api.sparse_problem_compute_missing_properties(handle_));
+    }
+
+    std::shared_ptr<graph_t> make_graph() override;
+    std::shared_ptr<sparse_matrix_t> make_sparse_matrix() override;
+    std::shared_ptr<symbolic_t> make_symbolic_analysis() override;
+
+  private:
+    std::shared_ptr<context_t> context_;
+    std::shared_ptr<imported_plugin_t> plugin_;
+    ssi_sparse_problem_h handle_;
+    std::shared_ptr<imported_graph_t> graph_;
+    std::shared_ptr<imported_sparse_matrix_t> matrix_;
+    std::shared_ptr<imported_symbolic_t> symbolic_;
+};
+
 class imported_context_t final :
   public context_t,
   public std::enable_shared_from_this<imported_context_t>{
@@ -1228,6 +1250,19 @@ class imported_context_t final :
         plugin_->api.context_make_graph(handle_,to_c(itype),&out));
       return std::make_shared<imported_graph_t>(shared_from_this(),plugin_,out);
     }
+    std::shared_ptr<sparse_problem_t> make_sparse_problem(
+      const sparse_problem_properties_t& properties) override{
+      ssi_sparse_problem_h out = nullptr;
+      ssi_sparse_problem_properties_t c_properties = to_c(properties);
+      check_status(
+        plugin_->api,
+        plugin_->api.context_make_sparse_problem(handle_,&c_properties,&out));
+      return std::make_shared<imported_sparse_problem_t>(
+        shared_from_this(),
+        plugin_,
+        out,
+        properties);
+    }
 
   private:
     std::shared_ptr<imported_plugin_t> plugin_;
@@ -1250,6 +1285,45 @@ inline std::shared_ptr<symbolic_t> imported_graph_t::make_symbolic_analysis(){
     shared_from_this(),
     plugin_,
     out);
+}
+
+inline std::shared_ptr<graph_t> imported_sparse_problem_t::make_graph(){
+  if(graph_ == nullptr){
+    ssi_graph_h out = nullptr;
+    check_status(
+      plugin_->api,
+      plugin_->api.sparse_problem_make_graph(handle_,&out));
+    graph_ = std::make_shared<imported_graph_t>(context_,plugin_,out);
+  }
+  return graph_;
+}
+
+inline std::shared_ptr<sparse_matrix_t> imported_sparse_problem_t::make_sparse_matrix(){
+  if(matrix_ == nullptr){
+    ssi_sparse_matrix_h out = nullptr;
+    check_status(
+      plugin_->api,
+      plugin_->api.sparse_problem_make_sparse_matrix(handle_,&out));
+    matrix_ = std::make_shared<imported_sparse_matrix_t>(
+      std::static_pointer_cast<imported_graph_t>(make_graph()),
+      plugin_,
+      out);
+  }
+  return matrix_;
+}
+
+inline std::shared_ptr<symbolic_t> imported_sparse_problem_t::make_symbolic_analysis(){
+  if(symbolic_ == nullptr){
+    ssi_symbolic_h out = nullptr;
+    check_status(
+      plugin_->api,
+      plugin_->api.sparse_problem_make_symbolic_analysis(handle_,&out));
+    symbolic_ = std::make_shared<imported_symbolic_t>(
+      std::static_pointer_cast<imported_graph_t>(make_graph()),
+      plugin_,
+      out);
+  }
+  return symbolic_;
 }
 
 inline std::shared_ptr<numeric_factorization_t>

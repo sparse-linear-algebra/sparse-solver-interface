@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 
@@ -47,13 +48,13 @@ class test_matrix_t final : public ssi::matrix_t{
       throw std::runtime_error("test plugin does not implement placement build");
     }
 
-    void read_to_host(std::function<void(const ssi::matrix_view_t&)>&) override{
+    void read_to_host(std::function<void(const ssi::matrix_view_t&)>&) const override{
       throw std::runtime_error("test plugin does not implement matrix read");
     }
 
     void read_to_placement(
       const ssi::placement_t&,
-      std::function<void(const ssi::matrix_view_t&)>&) override{
+      std::function<void(const ssi::matrix_view_t&)>&) const override{
       throw std::runtime_error("test plugin does not implement placement read");
     }
 
@@ -73,6 +74,13 @@ class test_context_t final :
 
     std::shared_ptr<ssi::graph_t> make_graph(ssi::itype_t) override{
       throw std::runtime_error("test plugin does not implement graphs");
+    }
+
+    std::shared_ptr<ssi::sparse_problem_t> make_sparse_problem(
+      const ssi::sparse_problem_properties_t& properties) override{
+      return std::make_shared<ssi::default_sparse_problem_t>(
+        shared_from_this(),
+        properties);
     }
 };
 

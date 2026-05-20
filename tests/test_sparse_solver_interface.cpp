@@ -3,62 +3,116 @@
 #include "sparse_solver_interface_plugin.hpp"
 
 #include <complex>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
-static void test_graph_properties(void)
+namespace {
+
+class test_graph_t final : public ssi::graph_t{
+  public:
+    test_graph_t(std::shared_ptr<ssi::context_t> context,ssi::itype_t itype) :
+      ssi::graph_t(std::move(context)),
+      itype_(itype) {}
+
+    ssi::itype_t itype() const override{
+      return itype_;
+    }
+
+    int64_t nrows() const override{
+      return 0;
+    }
+
+    int64_t ncols() const override{
+      return 0;
+    }
+
+    int64_t nedges() const override{
+      return 0;
+    }
+
+    void build_from_host(
+      int64_t,
+      int64_t,
+      ssi::graph_orientation_t,
+      std::function<void(ssi::graph_count_builder_t&)>&,
+      std::function<void(ssi::graph_edge_builder_t&)>&) override{
+      throw std::runtime_error("test graph does not build");
+    }
+
+    void borrow_compressed_graph_view(
+      const ssi::compressed_graph_view_t&) override{
+      throw std::runtime_error("test graph does not borrow");
+    }
+
+    std::shared_ptr<ssi::sparse_matrix_t> make_sparse_matrix() override{
+      throw std::runtime_error("test graph does not make matrices");
+    }
+
+    std::shared_ptr<ssi::symbolic_t> make_symbolic_analysis() override{
+      throw std::runtime_error("test graph does not make symbolic analyses");
+    }
+
+  private:
+    ssi::itype_t itype_;
+};
+
+class test_context_t final :
+  public ssi::context_t,
+  public std::enable_shared_from_this<test_context_t>{
+  public:
+    std::shared_ptr<ssi::matrix_t> make_matrix(ssi::dtype_t) override{
+      throw std::runtime_error("test context does not make dense matrices");
+    }
+
+    std::shared_ptr<ssi::graph_t> make_graph(ssi::itype_t itype) override{
+      return std::make_shared<test_graph_t>(shared_from_this(),itype);
+    }
+
+    std::shared_ptr<ssi::sparse_problem_t> make_sparse_problem(
+      const ssi::sparse_problem_properties_t& properties) override{
+      return std::make_shared<ssi::default_sparse_problem_t>(
+        shared_from_this(),
+        properties);
+    }
+};
+
+}  // namespace
+
+static void test_sparse_problem_properties(void)
 {
-  ssi::graph_properties_t properties;
+  ssi::sparse_problem_properties_t properties;
+  properties.nrows = 5;
+  properties.ncols = 5;
+  properties.itype = ssi::itype_t::i32;
+  properties.dtype = ssi::dtype_t::fp32;
+  properties.structurally_symmetric = ssi::property_state_t::known_true;
+  properties.numerically_symmetric = ssi::property_state_t::known_true;
+  properties.positive_definite = ssi::property_state_t::known_true;
+  properties.strong_hall = ssi::property_state_t::known_false;
+  properties.symmetric_storage = ssi::symmetric_storage_t::lower;
 
+  auto context = std::make_shared<test_context_t>();
+  auto problem = context->make_sparse_problem(properties);
+  TEST_CHECK(problem->properties().nrows == 5);
+  TEST_CHECK(problem->properties().ncols == 5);
+  TEST_CHECK(problem->properties().itype == ssi::itype_t::i32);
+  TEST_CHECK(problem->properties().dtype == ssi::dtype_t::fp32);
   TEST_CHECK(
-    properties.get(ssi::graph_property_t::structurally_symmetric) ==
-    ssi::graph_property_state_t::unknown);
-  TEST_CHECK(
-    properties.get(ssi::graph_property_t::strong_hall) ==
-    ssi::graph_property_state_t::unknown);
-
-  properties.set(
-    ssi::graph_property_t::structurally_symmetric,
-    ssi::graph_property_state_t::known_true);
-  properties.set(
-    ssi::graph_property_t::strong_hall,
-    ssi::graph_property_state_t::known_false);
-
-  TEST_CHECK(
-    properties.structurally_symmetric ==
-    ssi::graph_property_state_t::known_true);
-  TEST_CHECK(
-    properties.strong_hall ==
-    ssi::graph_property_state_t::known_false);
-}
-
-static void test_numeric_properties(void)
-{
-  ssi::numeric_properties_t properties;
-
-  TEST_CHECK(
-    properties.get(ssi::numeric_property_t::symmetric) ==
-    ssi::property_state_t::unknown);
-  TEST_CHECK(
-    properties.get(ssi::numeric_property_t::positive_definite) ==
-    ssi::property_state_t::unknown);
-  TEST_CHECK(
-    properties.get(ssi::numeric_property_t::negative_definite) ==
-    ssi::property_state_t::unknown);
-
-  properties.set(
-    ssi::numeric_property_t::symmetric,
+    problem->properties().structurally_symmetric ==
     ssi::property_state_t::known_true);
-  properties.set(
-    ssi::numeric_property_t::positive_definite,
-    ssi::property_state_t::known_false);
-  properties.set(
-    ssi::numeric_property_t::negative_definite,
-    ssi::property_state_t::known_false);
+  TEST_CHECK(
+    problem->properties().numerically_symmetric ==
+    ssi::property_state_t::known_true);
+  TEST_CHECK(
+    problem->properties().positive_definite ==
+    ssi::property_state_t::known_true);
+  TEST_CHECK(problem->properties().strong_hall == ssi::property_state_t::known_false);
+  TEST_CHECK(problem->properties().symmetric_storage == ssi::symmetric_storage_t::lower);
 
-  TEST_CHECK(properties.symmetric == ssi::property_state_t::known_true);
-  TEST_CHECK(properties.positive_definite == ssi::property_state_t::known_false);
-  TEST_CHECK(properties.negative_definite == ssi::property_state_t::known_false);
+  auto graph = problem->make_graph();
+  TEST_CHECK(graph->itype() == ssi::itype_t::i32);
 }
 
 static void test_c_abi_version(void)
@@ -218,8 +272,7 @@ static void test_sparse_values_view_float32(void)
 }
 
 TEST_LIST = {
-  { "graph_properties", test_graph_properties },
-  { "numeric_properties", test_numeric_properties },
+  { "sparse_problem_properties", test_sparse_problem_properties },
   { "c_abi_version", test_c_abi_version },
   { "graph_count_builder_i32", test_graph_count_builder_i32 },
   { "graph_edge_builder_row_oriented", test_graph_edge_builder_row_oriented },

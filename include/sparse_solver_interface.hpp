@@ -9,6 +9,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <utility>
 
 namespace ssi {
 
@@ -71,79 +72,37 @@ enum class property_state_t : uint8_t{
   known_false,
   known_true
 };
-using graph_property_state_t = property_state_t;
 
-enum class graph_property_t : uint8_t{
-  structurally_symmetric,
-  strong_hall
+class context_t;
+class graph_t;
+class sparse_matrix_t;
+class symbolic_t;
+class sparse_problem_t;
+
+enum class symmetric_storage_t : uint8_t{
+  unsymmetric,
+  full,
+  lower,
+  upper
 };
 
-enum class numeric_property_t : uint8_t{
-  symmetric,
-  positive_definite,
-  negative_definite
-};
+struct sparse_problem_properties_t{
+  int64_t nrows = 0;
+  int64_t ncols = 0;
+  graph_orientation_t orientation = graph_orientation_t::row;
+  itype_t itype = itype_t::i64;
+  dtype_t dtype = dtype_t::fp64;
 
-struct graph_properties_t{
-  graph_property_state_t structurally_symmetric = graph_property_state_t::unknown;
-  graph_property_state_t strong_hall = graph_property_state_t::unknown;
-
-  graph_property_state_t get(graph_property_t property) const{
-    if(property == graph_property_t::structurally_symmetric){
-      return structurally_symmetric;
-    }
-    if(property == graph_property_t::strong_hall){
-      return strong_hall;
-    }
-    throw std::invalid_argument("unknown graph property");
-  }
-
-  void set(graph_property_t property,graph_property_state_t state){
-    if(property == graph_property_t::structurally_symmetric){
-      structurally_symmetric = state;
-      return;
-    }
-    if(property == graph_property_t::strong_hall){
-      strong_hall = state;
-      return;
-    }
-    throw std::invalid_argument("unknown graph property");
-  }
-};
-
-struct numeric_properties_t{
-  property_state_t symmetric = property_state_t::unknown;
+  property_state_t structurally_symmetric = property_state_t::unknown;
+  property_state_t numerically_symmetric = property_state_t::unknown;
   property_state_t positive_definite = property_state_t::unknown;
   property_state_t negative_definite = property_state_t::unknown;
+  property_state_t full_column_rank = property_state_t::unknown;
+  property_state_t full_row_rank = property_state_t::unknown;
+  property_state_t nonsingular = property_state_t::unknown;
+  property_state_t strong_hall = property_state_t::unknown;
 
-  property_state_t get(numeric_property_t property) const{
-    if(property == numeric_property_t::symmetric){
-      return symmetric;
-    }
-    if(property == numeric_property_t::positive_definite){
-      return positive_definite;
-    }
-    if(property == numeric_property_t::negative_definite){
-      return negative_definite;
-    }
-    throw std::invalid_argument("unknown numeric property");
-  }
-
-  void set(numeric_property_t property,property_state_t state){
-    if(property == numeric_property_t::symmetric){
-      symmetric = state;
-      return;
-    }
-    if(property == numeric_property_t::positive_definite){
-      positive_definite = state;
-      return;
-    }
-    if(property == numeric_property_t::negative_definite){
-      negative_definite = state;
-      return;
-    }
-    throw std::invalid_argument("unknown numeric property");
-  }
+  symmetric_storage_t symmetric_storage = symmetric_storage_t::unsymmetric;
 };
 
 /* Defines memory placement .*/
@@ -217,7 +176,6 @@ struct matrix_view_t{
 };
 
 
-class context_t;
 class matrix_t{
   public:
     matrix_t(std::shared_ptr<context_t> context) : context_(context)  {
@@ -243,11 +201,13 @@ class matrix_t{
 
     /*Read matrix into a host-addressible view.*/
     /*Lifetime of data pointed by matrix_view_t only guaranteed to survive the callback.*/
-    virtual void read_to_host(std::function<void(const matrix_view_t&)>& reader) = 0;
+    virtual void read_to_host(std::function<void(const matrix_view_t&)>& reader) const = 0;
 
     /*Read matrix into placement-addressible view.*/    
     /*Lifetime of data pointed by matrix_view_t only guaranteed to survive the callback.*/
-    virtual void read_to_placement(const placement_t& placement,std::function<void(const matrix_view_t&)>& reader) = 0;
+    virtual void read_to_placement(
+      const placement_t& placement,
+      std::function<void(const matrix_view_t&)>& reader) const = 0;
   private:
     std::shared_ptr<context_t> context_;
 };
@@ -503,8 +463,6 @@ struct compressed_graph_view_t{
     }
 };
 
-class sparse_matrix_t;
-class symbolic_t;
 class numeric_factorization_t;
 class graph_t{
   public:
@@ -516,13 +474,6 @@ class graph_t{
     virtual int64_t nrows() const = 0;
     virtual int64_t ncols() const = 0;
     virtual int64_t nedges() const = 0;
-    virtual graph_properties_t properties() const = 0;
-    virtual void assert_property(
-      graph_property_t property,
-      graph_property_state_t state) = 0;
-    virtual void assert_properties(const graph_properties_t& properties) = 0;
-    virtual void compute_property(graph_property_t property) = 0;
-    virtual void compute_properties() = 0;
     /* Build in two passes. In the first pass the user fills edge counts for
      * rows or columns in [beg,end). The implementation computes offsets and
      * presents raw id buffers in the second pass. Edge ids are global;
@@ -732,13 +683,6 @@ class sparse_matrix_t{
     virtual int64_t nrows() const = 0;
     virtual int64_t ncols() const = 0;
     virtual dtype_t dtype() const = 0;
-    virtual numeric_properties_t properties() const = 0;
-    virtual void assert_property(
-      numeric_property_t property,
-      property_state_t state) = 0;
-    virtual void assert_properties(const numeric_properties_t& properties) = 0;
-    virtual void compute_property(numeric_property_t property) = 0;
-    virtual void compute_properties() = 0;
     const graph_t& graph() const{
       return *graph_;
     }
@@ -822,6 +766,49 @@ class numeric_factorization_t{
     std::shared_ptr<sparse_matrix_t> matrix_;
 };
 
+class sparse_problem_t{
+  public:
+    sparse_problem_t(
+      std::shared_ptr<context_t> context,
+      sparse_problem_properties_t properties) :
+      context_(std::move(context)),
+      properties_(properties) {
+      if(context_ == nullptr) throw std::runtime_error("null context");
+    }
+    virtual ~sparse_problem_t() {}
+
+    virtual sparse_problem_properties_t properties() const{
+      return properties_;
+    }
+
+    virtual void assert_properties(const sparse_problem_properties_t& properties){
+      properties_ = properties;
+    }
+
+    virtual void compute_missing_properties() {}
+
+    const context_t& context() const{
+      return *context_;
+    }
+
+    virtual std::shared_ptr<graph_t> make_graph() = 0;
+    virtual std::shared_ptr<sparse_matrix_t> make_sparse_matrix() = 0;
+    virtual std::shared_ptr<symbolic_t> make_symbolic_analysis() = 0;
+
+  protected:
+    std::shared_ptr<context_t> context_ptr() const{
+      return context_;
+    }
+
+    sparse_problem_properties_t& mutable_properties(){
+      return properties_;
+    }
+
+  private:
+    std::shared_ptr<context_t> context_;
+    sparse_problem_properties_t properties_;
+};
+
 class context_t{
   public:
     virtual ~context_t() {}
@@ -832,6 +819,47 @@ class context_t{
       return make_matrix(dtype_of<T>::value);
     }
     virtual std::shared_ptr<graph_t> make_graph(itype_t itype) = 0;
+    virtual std::shared_ptr<sparse_problem_t> make_sparse_problem(
+      const sparse_problem_properties_t& properties) = 0;
+};
+
+class default_sparse_problem_t final : public sparse_problem_t{
+  public:
+    default_sparse_problem_t(
+      std::shared_ptr<context_t> context,
+      sparse_problem_properties_t properties) :
+      sparse_problem_t(std::move(context),properties) {}
+
+    void assert_properties(const sparse_problem_properties_t& properties) override{
+      sparse_problem_t::assert_properties(properties);
+    }
+
+    std::shared_ptr<graph_t> make_graph() override{
+      if(graph_ == nullptr){
+        auto facts = properties();
+        graph_ = context_ptr()->make_graph(facts.itype);
+      }
+      return graph_;
+    }
+
+    std::shared_ptr<sparse_matrix_t> make_sparse_matrix() override{
+      if(matrix_ == nullptr){
+        matrix_ = make_graph()->make_sparse_matrix();
+      }
+      return matrix_;
+    }
+
+    std::shared_ptr<symbolic_t> make_symbolic_analysis() override{
+      if(symbolic_ == nullptr){
+        symbolic_ = make_graph()->make_symbolic_analysis();
+      }
+      return symbolic_;
+    }
+
+  private:
+    std::shared_ptr<graph_t> graph_;
+    std::shared_ptr<sparse_matrix_t> matrix_;
+    std::shared_ptr<symbolic_t> symbolic_;
 };
 
 

@@ -53,27 +53,29 @@ typedef enum ssi_property_state_t {
   SSI_PROPERTY_STATE_KNOWN_TRUE = 2
 } ssi_property_state_t;
 
-typedef enum ssi_graph_property_t {
-  SSI_GRAPH_PROPERTY_STRUCTURALLY_SYMMETRIC = 0,
-  SSI_GRAPH_PROPERTY_STRONG_HALL = 1
-} ssi_graph_property_t;
+typedef enum ssi_symmetric_storage_t {
+  SSI_SYMMETRIC_STORAGE_UNSYMMETRIC = 0,
+  SSI_SYMMETRIC_STORAGE_FULL = 1,
+  SSI_SYMMETRIC_STORAGE_LOWER = 2,
+  SSI_SYMMETRIC_STORAGE_UPPER = 3
+} ssi_symmetric_storage_t;
 
-typedef enum ssi_numeric_property_t {
-  SSI_NUMERIC_PROPERTY_SYMMETRIC = 0,
-  SSI_NUMERIC_PROPERTY_POSITIVE_DEFINITE = 1,
-  SSI_NUMERIC_PROPERTY_NEGATIVE_DEFINITE = 2
-} ssi_numeric_property_t;
-
-typedef struct ssi_graph_properties_t {
+typedef struct ssi_sparse_problem_properties_t {
+  int64_t nrows;
+  int64_t ncols;
+  ssi_graph_orientation_t orientation;
+  ssi_itype_t itype;
+  ssi_dtype_t dtype;
   ssi_property_state_t structurally_symmetric;
-  ssi_property_state_t strong_hall;
-} ssi_graph_properties_t;
-
-typedef struct ssi_numeric_properties_t {
-  ssi_property_state_t symmetric;
+  ssi_property_state_t numerically_symmetric;
   ssi_property_state_t positive_definite;
   ssi_property_state_t negative_definite;
-} ssi_numeric_properties_t;
+  ssi_property_state_t full_column_rank;
+  ssi_property_state_t full_row_rank;
+  ssi_property_state_t nonsingular;
+  ssi_property_state_t strong_hall;
+  ssi_symmetric_storage_t symmetric_storage;
+} ssi_sparse_problem_properties_t;
 
 typedef struct ssi_matrix_view_t {
   ssi_matrix_order_t order;
@@ -139,6 +141,7 @@ typedef struct ssi_sparse_value_builder_t {
 
 typedef struct ssi_context_t* ssi_context_h;
 typedef struct ssi_matrix_t* ssi_matrix_h;
+typedef struct ssi_sparse_problem_t* ssi_sparse_problem_h;
 typedef struct ssi_graph_t* ssi_graph_h;
 typedef struct ssi_sparse_matrix_t* ssi_sparse_matrix_h;
 typedef struct ssi_symbolic_t* ssi_symbolic_h;
@@ -181,6 +184,10 @@ typedef struct ssi_plugin_api_t {
     ssi_context_h context,
     ssi_itype_t itype,
     ssi_graph_h* out_graph);
+  ssi_status_t (*context_make_sparse_problem)(
+    ssi_context_h context,
+    const ssi_sparse_problem_properties_t* properties,
+    ssi_sparse_problem_h* out_problem);
 
   void (*matrix_release)(ssi_matrix_h matrix);
   ssi_status_t (*matrix_nrows)(ssi_matrix_h matrix,int64_t* out_nrows);
@@ -202,25 +209,30 @@ typedef struct ssi_plugin_api_t {
     ssi_const_matrix_view_callback_t reader,
     void* user_data);
 
+  void (*sparse_problem_release)(ssi_sparse_problem_h problem);
+  ssi_status_t (*sparse_problem_properties)(
+    ssi_sparse_problem_h problem,
+    ssi_sparse_problem_properties_t* out_properties);
+  ssi_status_t (*sparse_problem_assert_properties)(
+    ssi_sparse_problem_h problem,
+    const ssi_sparse_problem_properties_t* properties);
+  ssi_status_t (*sparse_problem_compute_missing_properties)(
+    ssi_sparse_problem_h problem);
+  ssi_status_t (*sparse_problem_make_graph)(
+    ssi_sparse_problem_h problem,
+    ssi_graph_h* out_graph);
+  ssi_status_t (*sparse_problem_make_sparse_matrix)(
+    ssi_sparse_problem_h problem,
+    ssi_sparse_matrix_h* out_matrix);
+  ssi_status_t (*sparse_problem_make_symbolic_analysis)(
+    ssi_sparse_problem_h problem,
+    ssi_symbolic_h* out_symbolic);
+
   void (*graph_release)(ssi_graph_h graph);
   ssi_status_t (*graph_itype)(ssi_graph_h graph,ssi_itype_t* out_itype);
   ssi_status_t (*graph_nrows)(ssi_graph_h graph,int64_t* out_nrows);
   ssi_status_t (*graph_ncols)(ssi_graph_h graph,int64_t* out_ncols);
   ssi_status_t (*graph_nedges)(ssi_graph_h graph,int64_t* out_nedges);
-  ssi_status_t (*graph_properties)(
-    ssi_graph_h graph,
-    ssi_graph_properties_t* out_properties);
-  ssi_status_t (*graph_assert_property)(
-    ssi_graph_h graph,
-    ssi_graph_property_t property,
-    ssi_property_state_t state);
-  ssi_status_t (*graph_assert_properties)(
-    ssi_graph_h graph,
-    const ssi_graph_properties_t* properties);
-  ssi_status_t (*graph_compute_property)(
-    ssi_graph_h graph,
-    ssi_graph_property_t property);
-  ssi_status_t (*graph_compute_properties)(ssi_graph_h graph);
   ssi_status_t (*graph_build_from_host)(
     ssi_graph_h graph,
     int64_t nrows,
@@ -250,20 +262,6 @@ typedef struct ssi_plugin_api_t {
   ssi_status_t (*sparse_matrix_dtype)(
     ssi_sparse_matrix_h matrix,
     ssi_dtype_t* out_dtype);
-  ssi_status_t (*sparse_matrix_properties)(
-    ssi_sparse_matrix_h matrix,
-    ssi_numeric_properties_t* out_properties);
-  ssi_status_t (*sparse_matrix_assert_property)(
-    ssi_sparse_matrix_h matrix,
-    ssi_numeric_property_t property,
-    ssi_property_state_t state);
-  ssi_status_t (*sparse_matrix_assert_properties)(
-    ssi_sparse_matrix_h matrix,
-    const ssi_numeric_properties_t* properties);
-  ssi_status_t (*sparse_matrix_compute_property)(
-    ssi_sparse_matrix_h matrix,
-    ssi_numeric_property_t property);
-  ssi_status_t (*sparse_matrix_compute_properties)(ssi_sparse_matrix_h matrix);
   ssi_status_t (*sparse_matrix_build_from_host)(
     ssi_sparse_matrix_h matrix,
     ssi_dtype_t dtype,
