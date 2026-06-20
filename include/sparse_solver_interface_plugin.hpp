@@ -47,9 +47,51 @@ inline const char* last_error_message(){
   return last_error.c_str();
 }
 
+inline const char* store_last_error(const std::string& message){
+  last_error = message;
+  return last_error.empty() ? nullptr : last_error.c_str();
+}
+
+inline ssi_status_t to_c(status_t status){
+  switch(status){
+    case status_t::ok: return SSI_STATUS_OK;
+    case status_t::invalid_argument: return SSI_STATUS_INVALID_ARGUMENT;
+    case status_t::out_of_range: return SSI_STATUS_OUT_OF_RANGE;
+    case status_t::unsupported: return SSI_STATUS_UNSUPPORTED;
+    case status_t::singular: return SSI_STATUS_SINGULAR;
+    case status_t::rank_deficient: return SSI_STATUS_RANK_DEFICIENT;
+    case status_t::indefinite: return SSI_STATUS_INDEFINITE;
+    case status_t::zero_pivot: return SSI_STATUS_ZERO_PIVOT;
+    case status_t::breakdown: return SSI_STATUS_BREAKDOWN;
+    case status_t::not_converged: return SSI_STATUS_NOT_CONVERGED;
+    case status_t::exception: return SSI_STATUS_EXCEPTION;
+  }
+  return SSI_STATUS_EXCEPTION;
+}
+
+inline status_t from_c(ssi_status_t status){
+  switch(status){
+    case SSI_STATUS_OK: return status_t::ok;
+    case SSI_STATUS_INVALID_ARGUMENT: return status_t::invalid_argument;
+    case SSI_STATUS_OUT_OF_RANGE: return status_t::out_of_range;
+    case SSI_STATUS_UNSUPPORTED: return status_t::unsupported;
+    case SSI_STATUS_SINGULAR: return status_t::singular;
+    case SSI_STATUS_RANK_DEFICIENT: return status_t::rank_deficient;
+    case SSI_STATUS_INDEFINITE: return status_t::indefinite;
+    case SSI_STATUS_ZERO_PIVOT: return status_t::zero_pivot;
+    case SSI_STATUS_BREAKDOWN: return status_t::breakdown;
+    case SSI_STATUS_NOT_CONVERGED: return status_t::not_converged;
+    case SSI_STATUS_EXCEPTION: return status_t::exception;
+  }
+  return status_t::exception;
+}
+
 inline ssi_status_t status_from_exception(){
   try{
     throw;
+  }catch(const error_t& e){
+    last_error = e.what();
+    return to_c(e.status());
   }catch(const std::invalid_argument& e){
     last_error = e.what();
     return SSI_STATUS_INVALID_ARGUMENT;
@@ -89,6 +131,27 @@ inline void check_status(const ssi_plugin_api_t& api,ssi_status_t status){
   }
   if(status == SSI_STATUS_OUT_OF_RANGE){
     throw std::out_of_range(message);
+  }
+  if(status == SSI_STATUS_UNSUPPORTED){
+    throw unsupported_error_t(message);
+  }
+  if(status == SSI_STATUS_SINGULAR){
+    throw singular_error_t(message);
+  }
+  if(status == SSI_STATUS_RANK_DEFICIENT){
+    throw rank_deficient_error_t(message);
+  }
+  if(status == SSI_STATUS_INDEFINITE){
+    throw indefinite_error_t(message);
+  }
+  if(status == SSI_STATUS_ZERO_PIVOT){
+    throw zero_pivot_error_t(message);
+  }
+  if(status == SSI_STATUS_BREAKDOWN){
+    throw breakdown_error_t(message);
+  }
+  if(status == SSI_STATUS_NOT_CONVERGED){
+    throw not_converged_error_t(message);
   }
   throw std::runtime_error(message);
 }
@@ -184,6 +247,46 @@ inline sparse_problem_properties_t from_c(
     from_c(properties.nonsingular),
     from_c(properties.strong_hall),
     from_c(properties.symmetric_storage)
+  };
+}
+
+inline ssi_support_result_t to_c(const support_result_t& result){
+  return {
+    to_c(result.status),
+    result.reason.empty() ? nullptr : store_last_error(result.reason)
+  };
+}
+
+inline support_result_t from_c(const ssi_support_result_t& result){
+  return {
+    from_c(result.status),
+    result.reason == nullptr ? std::string{} : std::string(result.reason)
+  };
+}
+
+inline ssi_solve_result_t to_c(const solve_result_t& result){
+  return {
+    to_c(result.status),
+    result.converged ? 1 : 0,
+    result.iterations,
+    result.refinement_steps,
+    result.residual_norm,
+    result.relative_residual_norm,
+    result.backward_error,
+    result.reason.empty() ? nullptr : store_last_error(result.reason)
+  };
+}
+
+inline solve_result_t from_c(const ssi_solve_result_t& result){
+  return {
+    from_c(result.status),
+    result.converged != 0,
+    result.iterations,
+    result.refinement_steps,
+    result.residual_norm,
+    result.relative_residual_norm,
+    result.backward_error,
+    result.reason == nullptr ? std::string{} : std::string(result.reason)
   };
 }
 
@@ -502,6 +605,18 @@ inline ssi_status_t context_make_sparse_problem(
   });
 }
 
+inline ssi_status_t context_check_support(
+  ssi_context_h context,
+  const ssi_sparse_problem_properties_t* properties,
+  ssi_support_result_t* out_result){
+  return guard([&]{
+    if(context == nullptr || properties == nullptr || out_result == nullptr){
+      throw std::invalid_argument("null context, properties, or support result");
+    }
+    *out_result = to_c(context->ptr->check_support(from_c(*properties)));
+  });
+}
+
 inline void matrix_release(ssi_matrix_h matrix){ delete matrix; }
 inline void sparse_problem_release(ssi_sparse_problem_h problem){ delete problem; }
 inline void graph_release(ssi_graph_h graph){ delete graph; }
@@ -745,8 +860,15 @@ inline ssi_status_t numeric_factorization_dtype(
 inline ssi_status_t numeric_factorization_solve(
   ssi_numeric_factorization_h factorization,
   ssi_matrix_h rhs,
-  ssi_matrix_h solution){
-  return guard([&]{ factorization->ptr->solve(*rhs->ptr,*solution->ptr); });
+  ssi_matrix_h solution,
+  ssi_solve_result_t* out_result){
+  return guard([&]{
+    if(factorization == nullptr || rhs == nullptr || solution == nullptr ||
+       out_result == nullptr){
+      throw std::invalid_argument("null factorization, rhs, solution, or solve result");
+    }
+    *out_result = to_c(factorization->ptr->solve(*rhs->ptr,*solution->ptr));
+  });
 }
 
 inline void fill_export_api(ssi_plugin_api_t* out_api,create_context_fn create){
@@ -761,6 +883,7 @@ inline void fill_export_api(ssi_plugin_api_t* out_api,create_context_fn create){
   out_api->context_make_matrix = context_make_matrix;
   out_api->context_make_graph = context_make_graph;
   out_api->context_make_sparse_problem = context_make_sparse_problem;
+  out_api->context_check_support = context_check_support;
   out_api->matrix_release = matrix_release;
   out_api->matrix_nrows = matrix_nrows;
   out_api->matrix_ncols = matrix_ncols;
@@ -1151,18 +1274,21 @@ class imported_numeric_factorization_t final : public numeric_factorization_t{
       check_status(plugin_->api,plugin_->api.numeric_factorization_dtype(handle_,&out));
       return from_c(out);
     }
-    void solve(const matrix_t& rhs,matrix_t& solution) const override{
+    solve_result_t solve(const matrix_t& rhs,matrix_t& solution) const override{
       const auto* c_rhs = dynamic_cast<const imported_matrix_t*>(&rhs);
       auto* c_solution = dynamic_cast<imported_matrix_t*>(&solution);
       if(c_rhs == nullptr || c_solution == nullptr){
         throw std::invalid_argument("C ABI factorization can only solve with C ABI matrices");
       }
+      ssi_solve_result_t result{};
       check_status(
         plugin_->api,
         plugin_->api.numeric_factorization_solve(
           handle_,
           c_rhs->handle(),
-          c_solution->handle()));
+          c_solution->handle(),
+          &result));
+      return from_c(result);
     }
 
   private:
@@ -1234,6 +1360,16 @@ class imported_context_t final :
       if(handle_ != nullptr){
         plugin_->api.context_release(handle_);
       }
+    }
+
+    support_result_t check_support(
+      const sparse_problem_properties_t& properties) const override{
+      ssi_sparse_problem_properties_t c_properties = to_c(properties);
+      ssi_support_result_t result{};
+      check_status(
+        plugin_->api,
+        plugin_->api.context_check_support(handle_,&c_properties,&result));
+      return from_c(result);
     }
 
     std::shared_ptr<matrix_t> make_matrix(dtype_t dtype) override{

@@ -10,7 +10,144 @@
 
 namespace {
 
-class test_graph_t final : public ssi::graph_t{
+class test_matrix_t final : public ssi::matrix_t{
+  public:
+    test_matrix_t(std::shared_ptr<ssi::context_t> context,ssi::dtype_t dtype) :
+      ssi::matrix_t(std::move(context)),
+      dtype_(dtype) {}
+
+    int64_t nrows() const override{
+      return nrows_;
+    }
+
+    int64_t ncols() const override{
+      return ncols_;
+    }
+
+    ssi::dtype_t dtype() const override{
+      return dtype_;
+    }
+
+    void preallocate(int64_t nrows,int64_t ncols) override{
+      nrows_ = nrows;
+      ncols_ = ncols;
+    }
+
+    void borrow_matrix_view(
+      const ssi::placement_t&,
+      const ssi::matrix_view_t& view) override{
+      nrows_ = view.rend - view.rbeg;
+      ncols_ = view.cend - view.cbeg;
+      dtype_ = view.dtype;
+    }
+
+    void build_from_host(std::function<void(ssi::matrix_view_t&)>&) override{
+      throw std::runtime_error("test matrix does not build");
+    }
+
+    void build_from_placement(
+      std::function<void(const ssi::placement_t&,ssi::matrix_view_t&)>&) override{
+      throw std::runtime_error("test matrix does not build from placement");
+    }
+
+    void read_to_host(std::function<void(const ssi::matrix_view_t&)>&) const override{
+      throw std::runtime_error("test matrix does not read");
+    }
+
+    void read_to_placement(
+      const ssi::placement_t&,
+      std::function<void(const ssi::matrix_view_t&)>&) const override{
+      throw std::runtime_error("test matrix does not read to placement");
+    }
+
+  private:
+    int64_t nrows_ = 0;
+    int64_t ncols_ = 0;
+    ssi::dtype_t dtype_;
+};
+
+class test_sparse_matrix_t final : public ssi::sparse_matrix_t{
+  public:
+    test_sparse_matrix_t(std::shared_ptr<ssi::graph_t> graph,ssi::dtype_t dtype) :
+      ssi::sparse_matrix_t(std::move(graph)),
+      dtype_(dtype) {}
+
+    int64_t nrows() const override{
+      return graph().nrows();
+    }
+
+    int64_t ncols() const override{
+      return graph().ncols();
+    }
+
+    ssi::dtype_t dtype() const override{
+      return dtype_;
+    }
+
+    void build_from_host(
+      ssi::dtype_t dtype,
+      ssi::graph_orientation_t,
+      std::function<void(ssi::sparse_value_builder_t&)>&) override{
+      dtype_ = dtype;
+    }
+
+    void read_to_host(
+      ssi::graph_orientation_t,
+      std::function<void(const ssi::sparse_value_builder_t&)>&) const override{
+      throw std::runtime_error("test sparse matrix does not read");
+    }
+
+    void borrow_sparse_values_view(const ssi::sparse_values_view_t& view) override{
+      dtype_ = view.dtype;
+    }
+
+  private:
+    ssi::dtype_t dtype_;
+};
+
+class test_numeric_factorization_t final : public ssi::numeric_factorization_t{
+  public:
+    test_numeric_factorization_t(
+      std::shared_ptr<ssi::symbolic_t> symbolic,
+      std::shared_ptr<ssi::sparse_matrix_t> matrix) :
+      ssi::numeric_factorization_t(std::move(symbolic),std::move(matrix)) {}
+
+    ssi::dtype_t dtype() const override{
+      return matrix().dtype();
+    }
+
+    ssi::solve_result_t solve(const ssi::matrix_t&,ssi::matrix_t&) const override{
+      return {
+        ssi::status_t::ok,
+        true,
+        0,
+        1,
+        0.0,
+        0.0,
+        0.0,
+        "direct solve"
+      };
+    }
+};
+
+class test_symbolic_t final :
+  public ssi::symbolic_t,
+  public std::enable_shared_from_this<test_symbolic_t>{
+  public:
+    explicit test_symbolic_t(std::shared_ptr<ssi::graph_t> graph) :
+      ssi::symbolic_t(std::move(graph)) {}
+
+    std::shared_ptr<ssi::numeric_factorization_t>
+    make_numeric_factorization(std::shared_ptr<ssi::sparse_matrix_t> matrix) override{
+      return std::make_shared<test_numeric_factorization_t>(
+        std::static_pointer_cast<ssi::symbolic_t>(shared_from_this()),
+        std::move(matrix));
+    }
+};
+
+class test_graph_t final :
+  public ssi::graph_t,
+  public std::enable_shared_from_this<test_graph_t>{
   public:
     test_graph_t(std::shared_ptr<ssi::context_t> context,ssi::itype_t itype) :
       ssi::graph_t(std::move(context)),
@@ -47,11 +184,14 @@ class test_graph_t final : public ssi::graph_t{
     }
 
     std::shared_ptr<ssi::sparse_matrix_t> make_sparse_matrix() override{
-      throw std::runtime_error("test graph does not make matrices");
+      return std::make_shared<test_sparse_matrix_t>(
+        std::static_pointer_cast<ssi::graph_t>(shared_from_this()),
+        ssi::dtype_t::fp64);
     }
 
     std::shared_ptr<ssi::symbolic_t> make_symbolic_analysis() override{
-      throw std::runtime_error("test graph does not make symbolic analyses");
+      return std::make_shared<test_symbolic_t>(
+        std::static_pointer_cast<ssi::graph_t>(shared_from_this()));
     }
 
   private:
@@ -62,8 +202,8 @@ class test_context_t final :
   public ssi::context_t,
   public std::enable_shared_from_this<test_context_t>{
   public:
-    std::shared_ptr<ssi::matrix_t> make_matrix(ssi::dtype_t) override{
-      throw std::runtime_error("test context does not make dense matrices");
+    std::shared_ptr<ssi::matrix_t> make_matrix(ssi::dtype_t dtype) override{
+      return std::make_shared<test_matrix_t>(shared_from_this(),dtype);
     }
 
     std::shared_ptr<ssi::graph_t> make_graph(ssi::itype_t itype) override{
@@ -119,9 +259,103 @@ static void test_c_abi_version(void)
 {
   ssi_plugin_api_t api{};
 
-  TEST_CHECK(SSI_ABI_VERSION_MAJOR == 0u);
-  TEST_CHECK(SSI_ABI_VERSION_MINOR == 1u);
+  TEST_CHECK(SSI_ABI_VERSION_MAJOR == 1u);
+  TEST_CHECK(SSI_ABI_VERSION_MINOR == 0u);
   TEST_CHECK(api.struct_size == 0u);
+}
+
+static void test_status_exception_mapping(void)
+{
+  ssi_plugin_api_t api{};
+  api.last_error_message = ssi::plugin::detail::last_error_message;
+
+  auto unsupported_status = ssi::plugin::detail::guard([]{
+    throw ssi::unsupported_error_t("unsupported dtype");
+  });
+  TEST_CHECK(unsupported_status == SSI_STATUS_UNSUPPORTED);
+  TEST_EXCEPTION(
+    ssi::plugin::detail::check_status(api,unsupported_status),
+    ssi::unsupported_error_t);
+
+  auto singular_status = ssi::plugin::detail::guard([]{
+    throw ssi::singular_error_t("zero diagonal pivot");
+  });
+  TEST_CHECK(singular_status == SSI_STATUS_SINGULAR);
+  TEST_EXCEPTION(
+    ssi::plugin::detail::check_status(api,singular_status),
+    ssi::singular_error_t);
+}
+
+static void test_sparse_problem_property_consistency(void)
+{
+  ssi::sparse_problem_properties_t properties;
+  properties.nrows = 5;
+  properties.ncols = 5;
+  properties.itype = ssi::itype_t::i64;
+  properties.dtype = ssi::dtype_t::fp64;
+  properties.nonsingular = ssi::property_state_t::known_true;
+
+  auto context = std::make_shared<test_context_t>();
+  auto problem = context->make_sparse_problem(properties);
+
+  auto refined = properties;
+  refined.strong_hall = ssi::property_state_t::known_true;
+  problem->assert_properties(refined);
+  TEST_CHECK(problem->properties().strong_hall == ssi::property_state_t::known_true);
+
+  auto contradicted = problem->properties();
+  contradicted.nonsingular = ssi::property_state_t::known_false;
+  TEST_EXCEPTION(problem->assert_properties(contradicted),std::invalid_argument);
+
+  (void)problem->make_graph();
+  auto changed_dtype = problem->properties();
+  changed_dtype.dtype = ssi::dtype_t::fp32;
+  TEST_EXCEPTION(problem->assert_properties(changed_dtype),std::invalid_argument);
+
+  auto impossible = properties;
+  impossible.nrows = 3;
+  impossible.ncols = 4;
+  impossible.nonsingular = ssi::property_state_t::known_true;
+  TEST_EXCEPTION(context->make_sparse_problem(impossible),std::invalid_argument);
+}
+
+static void test_default_support_query(void)
+{
+  auto context = std::make_shared<test_context_t>();
+
+  ssi::sparse_problem_properties_t properties;
+  properties.nrows = 4;
+  properties.ncols = 4;
+  properties.dtype = ssi::dtype_t::fp64;
+
+  auto result = context->check_support(properties);
+  TEST_CHECK(result.supported());
+  TEST_CHECK(context->supports(properties));
+}
+
+static void test_solve_result_metadata(void)
+{
+  auto context = std::make_shared<test_context_t>();
+
+  ssi::sparse_problem_properties_t properties;
+  properties.nrows = 3;
+  properties.ncols = 3;
+  properties.dtype = ssi::dtype_t::fp64;
+
+  auto problem = context->make_sparse_problem(properties);
+  auto matrix = problem->make_sparse_matrix();
+  auto symbolic = problem->make_symbolic_analysis();
+  auto factorization = symbolic->make_numeric_factorization(matrix);
+  auto rhs = context->make_matrix(ssi::dtype_t::fp64);
+  auto solution = context->make_matrix(ssi::dtype_t::fp64);
+
+  auto result = factorization->solve(*rhs,*solution);
+  TEST_CHECK(result.success());
+  TEST_CHECK(result.converged);
+  TEST_CHECK(result.iterations == 0);
+  TEST_CHECK(result.refinement_steps == 1);
+  TEST_CHECK(result.residual_norm == 0.0);
+  TEST_CHECK(result.reason == "direct solve");
 }
 
 static void test_graph_count_builder_i32(void)
@@ -274,6 +508,10 @@ static void test_sparse_values_view_float32(void)
 TEST_LIST = {
   { "sparse_problem_properties", test_sparse_problem_properties },
   { "c_abi_version", test_c_abi_version },
+  { "status_exception_mapping", test_status_exception_mapping },
+  { "sparse_problem_property_consistency", test_sparse_problem_property_consistency },
+  { "default_support_query", test_default_support_query },
+  { "solve_result_metadata", test_solve_result_metadata },
   { "graph_count_builder_i32", test_graph_count_builder_i32 },
   { "graph_edge_builder_row_oriented", test_graph_edge_builder_row_oriented },
   { "graph_edge_builder_column_oriented", test_graph_edge_builder_column_oriented },

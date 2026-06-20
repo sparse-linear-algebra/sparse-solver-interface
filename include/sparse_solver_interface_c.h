@@ -8,8 +8,8 @@
 extern "C" {
 #endif
 
-#define SSI_ABI_VERSION_MAJOR 0u
-#define SSI_ABI_VERSION_MINOR 1u
+#define SSI_ABI_VERSION_MAJOR 1u
+#define SSI_ABI_VERSION_MINOR 0u
 
 #if defined(_WIN32)
   #define SSI_EXPORT __declspec(dllexport)
@@ -22,7 +22,13 @@ typedef enum ssi_status_t {
   SSI_STATUS_INVALID_ARGUMENT = 1,
   SSI_STATUS_OUT_OF_RANGE = 2,
   SSI_STATUS_UNSUPPORTED = 3,
-  SSI_STATUS_EXCEPTION = 4
+  SSI_STATUS_SINGULAR = 4,
+  SSI_STATUS_RANK_DEFICIENT = 5,
+  SSI_STATUS_INDEFINITE = 6,
+  SSI_STATUS_ZERO_PIVOT = 7,
+  SSI_STATUS_BREAKDOWN = 8,
+  SSI_STATUS_NOT_CONVERGED = 9,
+  SSI_STATUS_EXCEPTION = 100
 } ssi_status_t;
 
 typedef enum ssi_dtype_t {
@@ -76,6 +82,22 @@ typedef struct ssi_sparse_problem_properties_t {
   ssi_property_state_t strong_hall;
   ssi_symmetric_storage_t symmetric_storage;
 } ssi_sparse_problem_properties_t;
+
+typedef struct ssi_support_result_t {
+  ssi_status_t status;
+  const char* reason;
+} ssi_support_result_t;
+
+typedef struct ssi_solve_result_t {
+  ssi_status_t status;
+  int converged;
+  int64_t iterations;
+  int64_t refinement_steps;
+  double residual_norm;
+  double relative_residual_norm;
+  double backward_error;
+  const char* reason;
+} ssi_solve_result_t;
 
 typedef struct ssi_matrix_view_t {
   ssi_matrix_order_t order;
@@ -188,6 +210,10 @@ typedef struct ssi_plugin_api_t {
     ssi_context_h context,
     const ssi_sparse_problem_properties_t* properties,
     ssi_sparse_problem_h* out_problem);
+  ssi_status_t (*context_check_support)(
+    ssi_context_h context,
+    const ssi_sparse_problem_properties_t* properties,
+    ssi_support_result_t* out_result);
 
   void (*matrix_release)(ssi_matrix_h matrix);
   ssi_status_t (*matrix_nrows)(ssi_matrix_h matrix,int64_t* out_nrows);
@@ -291,7 +317,8 @@ typedef struct ssi_plugin_api_t {
   ssi_status_t (*numeric_factorization_solve)(
     ssi_numeric_factorization_h factorization,
     ssi_matrix_h rhs,
-    ssi_matrix_h solution);
+    ssi_matrix_h solution,
+    ssi_solve_result_t* out_result);
 } ssi_plugin_api_t;
 
 typedef ssi_status_t (*ssi_get_plugin_fn)(ssi_plugin_api_t* out_api);

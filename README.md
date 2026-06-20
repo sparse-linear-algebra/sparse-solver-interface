@@ -14,7 +14,7 @@ The stable binary plugin ABI is split into:
 Install the headers into a non-system prefix:
 
 ```sh
-cmake -S . -B build -DCMAKE_INSTALL_PREFIX="$HOME/.local/sparse_solver_interface/0.1.0"
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX="$HOME/.local/sparse_solver_interface/1.0.0"
 cmake --build build
 cmake --install build
 ```
@@ -22,7 +22,7 @@ cmake --install build
 Then point another CMake project at that prefix:
 
 ```cmake
-set(SPARSE_SOLVER_INTERFACE_ROOT "$ENV{HOME}/.local/sparse_solver_interface/0.1.0")
+set(SPARSE_SOLVER_INTERFACE_ROOT "$ENV{HOME}/.local/sparse_solver_interface/1.0.0")
 
 target_include_directories(
   my_solver
@@ -64,8 +64,12 @@ factory for it:
 
 class my_context_t final : public ssi::context_t {
 public:
+  ssi::support_result_t check_support(
+    const ssi::sparse_problem_properties_t& properties) const override;
   std::shared_ptr<ssi::matrix_t> make_matrix(ssi::dtype_t dtype) override;
   std::shared_ptr<ssi::graph_t> make_graph(ssi::itype_t itype) override;
+  std::shared_ptr<ssi::sparse_problem_t> make_sparse_problem(
+    const ssi::sparse_problem_properties_t& properties) override;
 };
 
 std::shared_ptr<ssi::context_t> make_my_context()
@@ -102,6 +106,11 @@ properties.structurally_symmetric = ssi::property_state_t::known_true;
 properties.numerically_symmetric = ssi::property_state_t::known_true;
 properties.positive_definite = ssi::property_state_t::known_true;
 
+auto support = context->check_support(properties);
+if(!support.supported()){
+  throw ssi::unsupported_error_t(support.reason);
+}
+
 auto problem = context->make_sparse_problem(properties);
 auto graph = problem->make_graph();
 auto matrix = problem->make_sparse_matrix();
@@ -115,19 +124,53 @@ fallback path from matrix facts instead of from caller-supplied algorithm hints.
 The lower-level graph and sparse-matrix objects no longer carry separate
 property sets.
 
+Property assertions are monotonic. Unknown facts may become known, and repeated
+known facts are accepted, but known-true and known-false contradictions are
+rejected. Dimensions, orientation, index type, value type, and symmetric storage
+are locked once a dependent graph, sparse matrix, or symbolic analysis has been
+created. Implementations should also reject impossible fact combinations such as
+full column rank for a short-wide matrix, nonsingularity for a nonsquare matrix,
+or definiteness without a square shape.
+
+Use `context_t::check_support(properties)` before constructing solver-specific
+objects when a client wants to choose among solvers without probing by failure.
+Return `ssi::status_t::unsupported` with a short reason for valid problems that
+are outside the solver's supported class. Throw `ssi::unsupported_error_t` for
+the same condition when construction or execution reaches an unsupported path.
+
+Numeric failures are separate from unsupported problems. Use typed numeric
+statuses or exceptions such as `singular`, `rank_deficient`, `indefinite`,
+`zero_pivot`, `breakdown`, and `not_converged` when the solver accepted the
+problem class but this particular data failed. `numeric_factorization_t::solve`
+returns `ssi::solve_result_t`, so direct solvers can return a minimal success
+result while iterative or refining solvers can report residuals, iterations,
+refinement steps, convergence, backward error, and an optional reason string.
+
 The exported shared object must provide the `ssi_get_plugin` C symbol. The
 `SSI_EXPORT_PLUGIN(...)` macro generates that symbol and fills the versioned C
 function table. The loader checks the ABI major version before constructing the
 C++ wrapper objects.
 
-The lifetime rules are the same as the C++ interface:
+Borrowed-memory rules are intentionally explicit:
 
+- SSI does not own borrowed memory and will not free it.
 - Borrowed dense matrix views must outlive the matrix that borrowed them.
 - Borrowed compressed graph views must outlive the graph that borrowed them.
-- Borrowed sparse value views must outlive the sparse matrix that borrowed them.
+- Borrowed sparse value views must outlive the sparse matrix and any
+  factorization that may reference those values.
+- Borrowed graph structure is immutable after it is borrowed.
+- External mutation of borrowed values while an SSI operation is active is
+  forbidden unless the implementation explicitly documents stronger guarantees.
+- Input/output aliasing, including `solve(rhs,rhs)`, is unsupported unless the
+  implementation explicitly documents it.
+- SSI objects are not internally synchronized; callers own thread-safety for
+  concurrent access and for memory shared across plugins.
+- Across plugin boundaries, borrowed memory must remain addressable and
+  ABI-compatible for the receiving plugin.
 - Builder callback buffers are only valid for the duration of the callback.
 
 Implementations should throw normal C++ exceptions internally. The plugin
 adapter catches them at the C boundary, returns a status code, and exposes the
 message through the ABI's last-error hook. Consumers using the C++ loader see
-those statuses converted back to C++ exceptions.
+typed statuses converted back to typed C++ exceptions. Operation result structs
+also carry status and reason fields for non-throwing metadata paths.
