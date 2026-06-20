@@ -9,6 +9,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ssi {
@@ -73,6 +74,91 @@ enum class property_state_t : uint8_t{
   known_true
 };
 
+enum class status_t : uint8_t{
+  ok,
+  invalid_argument,
+  out_of_range,
+  unsupported,
+  singular,
+  rank_deficient,
+  indefinite,
+  zero_pivot,
+  breakdown,
+  not_converged,
+  exception
+};
+
+class error_t : public std::runtime_error{
+  public:
+    error_t(status_t status,std::string message) :
+      std::runtime_error(std::move(message)),
+      status_(status) {}
+
+    status_t status() const noexcept{
+      return status_;
+    }
+
+  private:
+    status_t status_;
+};
+
+class unsupported_error_t : public error_t{
+  public:
+    explicit unsupported_error_t(std::string message) :
+      error_t(status_t::unsupported,std::move(message)) {}
+};
+
+class numeric_error_t : public error_t{
+  public:
+    numeric_error_t(status_t status,std::string message) :
+      error_t(status,std::move(message)) {}
+};
+
+class singular_error_t : public numeric_error_t{
+  public:
+    explicit singular_error_t(std::string message) :
+      numeric_error_t(status_t::singular,std::move(message)) {}
+};
+
+class rank_deficient_error_t : public numeric_error_t{
+  public:
+    explicit rank_deficient_error_t(std::string message) :
+      numeric_error_t(status_t::rank_deficient,std::move(message)) {}
+};
+
+class indefinite_error_t : public numeric_error_t{
+  public:
+    explicit indefinite_error_t(std::string message) :
+      numeric_error_t(status_t::indefinite,std::move(message)) {}
+};
+
+class zero_pivot_error_t : public numeric_error_t{
+  public:
+    explicit zero_pivot_error_t(std::string message) :
+      numeric_error_t(status_t::zero_pivot,std::move(message)) {}
+};
+
+class breakdown_error_t : public numeric_error_t{
+  public:
+    explicit breakdown_error_t(std::string message) :
+      numeric_error_t(status_t::breakdown,std::move(message)) {}
+};
+
+class not_converged_error_t : public numeric_error_t{
+  public:
+    explicit not_converged_error_t(std::string message) :
+      numeric_error_t(status_t::not_converged,std::move(message)) {}
+};
+
+struct support_result_t{
+  status_t status = status_t::ok;
+  std::string reason;
+
+  bool supported() const noexcept{
+    return status == status_t::ok;
+  }
+};
+
 class context_t;
 class graph_t;
 class sparse_matrix_t;
@@ -104,6 +190,162 @@ struct sparse_problem_properties_t{
 
   symmetric_storage_t symmetric_storage = symmetric_storage_t::unsymmetric;
 };
+
+struct solve_result_t{
+  status_t status = status_t::ok;
+  bool converged = true;
+  int64_t iterations = -1;
+  int64_t refinement_steps = -1;
+  double residual_norm = std::numeric_limits<double>::quiet_NaN();
+  double relative_residual_norm = std::numeric_limits<double>::quiet_NaN();
+  double backward_error = std::numeric_limits<double>::quiet_NaN();
+  std::string reason;
+
+  bool success() const noexcept{
+    return status == status_t::ok;
+  }
+};
+
+namespace detail {
+
+inline bool is_known(property_state_t state){
+  return state != property_state_t::unknown;
+}
+
+inline bool is_true(property_state_t state){
+  return state == property_state_t::known_true;
+}
+
+inline bool is_false(property_state_t state){
+  return state == property_state_t::known_false;
+}
+
+inline property_state_t refine_property_state(
+  property_state_t current,
+  property_state_t asserted,
+  const char* name){
+  if(asserted == property_state_t::unknown){
+    return current;
+  }
+  if(current == property_state_t::unknown){
+    return asserted;
+  }
+  if(current != asserted){
+    throw std::invalid_argument(std::string("contradictory property: ") + name);
+  }
+  return current;
+}
+
+inline void validate_sparse_problem_properties(
+  const sparse_problem_properties_t& properties){
+  if(properties.nrows < 0 || properties.ncols < 0){
+    throw std::invalid_argument("negative sparse problem dimension");
+  }
+  if(properties.symmetric_storage != symmetric_storage_t::unsymmetric){
+    if(properties.nrows != properties.ncols){
+      throw std::invalid_argument("symmetric storage requires a square problem");
+    }
+    if(is_false(properties.structurally_symmetric)){
+      throw std::invalid_argument(
+        "symmetric storage contradicts known structurally nonsymmetric property");
+    }
+  }
+  if(is_true(properties.structurally_symmetric) && properties.nrows != properties.ncols){
+    throw std::invalid_argument("structural symmetry requires a square problem");
+  }
+  if(is_true(properties.numerically_symmetric) && properties.nrows != properties.ncols){
+    throw std::invalid_argument("numeric symmetry requires a square problem");
+  }
+  if(is_true(properties.positive_definite) || is_true(properties.negative_definite)){
+    if(properties.nrows != properties.ncols){
+      throw std::invalid_argument("definiteness requires a square problem");
+    }
+    if(is_false(properties.nonsingular)){
+      throw std::invalid_argument("definiteness contradicts known singular property");
+    }
+    if(is_false(properties.full_column_rank) || is_false(properties.full_row_rank)){
+      throw std::invalid_argument("definiteness contradicts known rank deficiency");
+    }
+  }
+  if(is_true(properties.positive_definite) && is_true(properties.negative_definite)){
+    throw std::invalid_argument(
+      "positive definite and negative definite properties conflict");
+  }
+  if(is_true(properties.nonsingular) && properties.nrows != properties.ncols){
+    throw std::invalid_argument("nonsingularity requires a square problem");
+  }
+  if(is_true(properties.full_column_rank) && properties.nrows < properties.ncols){
+    throw std::invalid_argument("full column rank is impossible for this shape");
+  }
+  if(is_true(properties.full_row_rank) && properties.ncols < properties.nrows){
+    throw std::invalid_argument("full row rank is impossible for this shape");
+  }
+}
+
+inline sparse_problem_properties_t refine_sparse_problem_properties(
+  const sparse_problem_properties_t& current,
+  const sparse_problem_properties_t& asserted){
+  sparse_problem_properties_t refined = asserted;
+  refined.structurally_symmetric = refine_property_state(
+    current.structurally_symmetric,
+    asserted.structurally_symmetric,
+    "structurally_symmetric");
+  refined.numerically_symmetric = refine_property_state(
+    current.numerically_symmetric,
+    asserted.numerically_symmetric,
+    "numerically_symmetric");
+  refined.positive_definite = refine_property_state(
+    current.positive_definite,
+    asserted.positive_definite,
+    "positive_definite");
+  refined.negative_definite = refine_property_state(
+    current.negative_definite,
+    asserted.negative_definite,
+    "negative_definite");
+  refined.full_column_rank = refine_property_state(
+    current.full_column_rank,
+    asserted.full_column_rank,
+    "full_column_rank");
+  refined.full_row_rank = refine_property_state(
+    current.full_row_rank,
+    asserted.full_row_rank,
+    "full_row_rank");
+  refined.nonsingular = refine_property_state(
+    current.nonsingular,
+    asserted.nonsingular,
+    "nonsingular");
+  refined.strong_hall = refine_property_state(
+    current.strong_hall,
+    asserted.strong_hall,
+    "strong_hall");
+  validate_sparse_problem_properties(refined);
+  return refined;
+}
+
+inline void require_locked_property(
+  bool condition,
+  const char* name){
+  if(!condition){
+    throw std::invalid_argument(std::string("cannot change sparse problem ") + name);
+  }
+}
+
+inline void require_locked_sparse_problem_properties(
+  const sparse_problem_properties_t& current,
+  const sparse_problem_properties_t& asserted){
+  require_locked_property(current.nrows == asserted.nrows,"nrows after dependent objects exist");
+  require_locked_property(current.ncols == asserted.ncols,"ncols after dependent objects exist");
+  require_locked_property(
+    current.orientation == asserted.orientation,
+    "orientation after dependent objects exist");
+  require_locked_property(current.itype == asserted.itype,"itype after dependent objects exist");
+  require_locked_property(current.dtype == asserted.dtype,"dtype after dependent objects exist");
+  require_locked_property(
+    current.symmetric_storage == asserted.symmetric_storage,
+    "symmetric storage after dependent objects exist");
+}
+
+}  // namespace detail
 
 /* Defines memory placement .*/
 class placement_t{
@@ -759,7 +1001,7 @@ class numeric_factorization_t{
       return symbolic_->context();
     }
     virtual dtype_t dtype() const = 0;
-    virtual void solve(const matrix_t& rhs,matrix_t& solution) const = 0;
+    virtual solve_result_t solve(const matrix_t& rhs,matrix_t& solution) const = 0;
 
   private:
     std::shared_ptr<symbolic_t> symbolic_;
@@ -774,6 +1016,7 @@ class sparse_problem_t{
       context_(std::move(context)),
       properties_(properties) {
       if(context_ == nullptr) throw std::runtime_error("null context");
+      detail::validate_sparse_problem_properties(properties_);
     }
     virtual ~sparse_problem_t() {}
 
@@ -782,7 +1025,7 @@ class sparse_problem_t{
     }
 
     virtual void assert_properties(const sparse_problem_properties_t& properties){
-      properties_ = properties;
+      properties_ = detail::refine_sparse_problem_properties(properties_,properties);
     }
 
     virtual void compute_missing_properties() {}
@@ -813,6 +1056,16 @@ class context_t{
   public:
     virtual ~context_t() {}
 
+    virtual support_result_t check_support(
+      const sparse_problem_properties_t& properties) const{
+      detail::validate_sparse_problem_properties(properties);
+      return {};
+    }
+
+    bool supports(const sparse_problem_properties_t& properties) const{
+      return check_support(properties).supported();
+    }
+
     virtual std::shared_ptr<matrix_t> make_matrix(dtype_t dtype) = 0;
     template<typename T>
     std::shared_ptr<matrix_t> make_matrix(){
@@ -831,6 +1084,9 @@ class default_sparse_problem_t final : public sparse_problem_t{
       sparse_problem_t(std::move(context),properties) {}
 
     void assert_properties(const sparse_problem_properties_t& properties) override{
+      if(graph_ != nullptr || matrix_ != nullptr || symbolic_ != nullptr){
+        detail::require_locked_sparse_problem_properties(this->properties(),properties);
+      }
       sparse_problem_t::assert_properties(properties);
     }
 
